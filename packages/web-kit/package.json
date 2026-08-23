@@ -1,0 +1,40 @@
+{
+  "name": "@tivility/dsh-web-kit",
+  "version": "0.1.0",
+  "description": "Shared HTTP building blocks for out-of-tree DeepSeek Harness web plugins: the browser-trust fence, path containment, root resolution, and a static response pipeline.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "README.md",
+    "lib/**",
+    "src/**"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "http",
+    "dns-rebinding",
+    "path-containment"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tivility/dsh-plugins.git",
+    "directory": "packages/web-kit"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.1-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-host-webserver": "0.1.1-rc.2"
+  }
+}

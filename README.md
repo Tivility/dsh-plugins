@@ -17,6 +17,7 @@ and says so alongside the reason this repository exists:
 | Package | What it does |
 | ------- | ------------ |
 | [`@tivility/dsh-llm-affinity`](packages/llm-affinity) | Puts the harness session id on the wire so a gateway can key per-conversation state (prompt cache, account stickiness, Gemini `thoughtSignature` replay) |
+| [`@tivility/dsh-web-kit`](packages/web-kit) | **Library, not a plugin.** The browser-trust fence, path containment, and static-response plumbing the four web plugins share |
 
 ## Install into a profile
 
@@ -55,12 +56,6 @@ are hard to diagnose:
   function plugin's namespace.
 - **Optional services are read with `ctx.get(name)`**, not the `ctx.<name>`
   property proxy, which is topology-sensitive.
-- **Pin the harness peer range; `"*"` does not mean "latest".** Every published
-  `@deepseek-ai/dsh-*` version is a prerelease, and a range does not match
-  prereleases the way it matches releases — `"*"` resolves to the *oldest* one
-  on offer. That is not cosmetic: in `0.0.1-rc.1` the web server's service is
-  named `httpServer`, and in `0.1.1-rc.2` it is `webServer`. A package built
-  against the wrong one compiles cleanly and then finds no service at runtime.
 
 ## License
 
