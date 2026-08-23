@@ -1,0 +1,44 @@
+{
+  "name": "@tivility/dsh-file-upload",
+  "version": "0.1.0",
+  "description": "Drag-and-drop upload into a DeepSeek Harness workspace, gated by ownerAuth when it is installed.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "README.md",
+    "lib/**",
+    "src/**"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "upload",
+    "workspace"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tivility/dsh-plugins.git",
+    "directory": "packages/file-upload"
+  },
+  "dependencies": {
+    "@tivility/dsh-web-kit": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-host-webserver": "0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "*"
+  }
+}

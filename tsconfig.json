@@ -5,6 +5,9 @@
       "path": "./packages/web-kit"
     },
     {
+      "path": "./packages/file-upload"
+    },
+    {
       "path": "./packages/file-viewer"
     },
     {

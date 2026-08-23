@@ -20,6 +20,12 @@ and says so alongside the reason this repository exists:
 | [`@tivility/dsh-web-kit`](packages/web-kit) | **Library, not a plugin.** The browser-trust fence, path containment, and static-response plumbing the four web plugins share |
 | [`@tivility/dsh-file-viewer`](packages/file-viewer) | Read-only browser preview of workspace files: listings, rendered Markdown, inline media, raw bytes |
 | [`@tivility/dsh-readonly-auth`](packages/readonly-auth) | Owner lock for a deployment more than one person can reach; provides the `ownerAuth` service |
+| [`@tivility/dsh-file-upload`](packages/file-upload) | Drag-and-drop upload into a workspace, gated by `ownerAuth` when it is installed |
+
+The four web plugins solve one problem between them: the harness's GUI is
+reachable from another machine, and nothing that machine can see is a file, a
+lock, or a link. Each is useful alone; installed together, `readonly-auth`
+becomes the lock the other two consult.
 
 ## Install into a profile
 
