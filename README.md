@@ -21,6 +21,7 @@ and says so alongside the reason this repository exists:
 | [`@tivility/dsh-file-viewer`](packages/file-viewer) | Read-only browser preview of workspace files: listings, rendered Markdown, inline media, raw bytes |
 | [`@tivility/dsh-readonly-auth`](packages/readonly-auth) | Owner lock for a deployment more than one person can reach; provides the `ownerAuth` service |
 | [`@tivility/dsh-file-upload`](packages/file-upload) | Drag-and-drop upload into a workspace, gated by `ownerAuth` when it is installed |
+| [`@tivility/dsh-session-share`](packages/session-share) | A link that opens one session instead of wherever the GUI was left |
 
 The four web plugins solve one problem between them: the harness's GUI is
 reachable from another machine, and nothing that machine can see is a file, a
@@ -43,6 +44,11 @@ pnpm install
 pnpm run build
 pnpm run test
 ```
+
+`build` runs `tsc -b` and then each package's own `bundle` script.
+`@tivility/dsh-session-share` is the only one with a browser half, and its
+bundle must exist before the harness loads it — the client-module scanner
+reports a missing bundle at startup rather than degrading.
 
 To use a working copy in a real profile without publishing:
 
