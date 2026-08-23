@@ -150,7 +150,21 @@ function clientBench(href: string, initial: Snapshot) {
   const listeners = new Set<() => void>()
   const opened: string[] = []
   const warnings: string[] = []
+  const registrations: { spec: Record<string, unknown>, component: unknown }[] = []
+  const locales: { ns: string, dicts: Record<string, unknown> }[] = []
   const ctx = {
+    slots: {
+      register(spec: Record<string, unknown>, component: unknown) {
+        registrations.push({ spec, component })
+        return () => {}
+      },
+    },
+    locale: {
+      register(ns: string, dicts: Record<string, unknown>) {
+        locales.push({ ns, dicts })
+        return () => {}
+      },
+    },
     sessions: {
       list: {
         getSnapshot: () => snapshot,
@@ -180,6 +194,8 @@ function clientBench(href: string, initial: Snapshot) {
     warnings,
     href: page.href,
     subscribers: () => listeners.size,
+    registrations,
+    locales,
   }
 }
 
@@ -239,6 +255,39 @@ describe('the browser half', () => {
   })
 })
 
+describe('the header control', () => {
+  it('registers into the session header utility band', () => {
+    const bench = clientBench('http://127.0.0.1:3080/', { byId: {}, phase: 'ready' })
+    bench.run()
+    const seat = bench.registrations.find(r => r.spec.name === 'conversation.session.header.utilities')
+    // Without this the feature is unreachable by a person: the link format
+    // only ever reaches the model, through the system prompt.
+    expect(seat).toBeDefined()
+    expect(seat?.spec.id).toBe('session-share')
+    expect(seat?.spec.locale).toBe('session.share')
+    expect(typeof seat?.component).toBe('function')
+  })
+
+  it('registers the control even on an ordinary visit with no parameter', () => {
+    const bench = clientBench('http://127.0.0.1:3080/', { byId: {}, phase: 'ready' })
+    bench.run()
+    expect(bench.registrations).toHaveLength(1)
+    expect(bench.subscribers()).toBe(0)
+  })
+
+  it('ships both locales, with matching keys', () => {
+    const bench = clientBench('http://127.0.0.1:3080/', { byId: {}, phase: 'ready' })
+    bench.run()
+    const bundle = bench.locales.find(l => l.ns === 'session.share')
+    expect(bundle).toBeDefined()
+    const en = bundle?.dicts.en as Record<string, string>
+    const zh = bundle?.dicts.zh as Record<string, string>
+    expect(Object.keys(en).sort()).toEqual(['copied', 'copy', 'hint'])
+    expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort())
+    for (const value of [...Object.values(en), ...Object.values(zh)]) expect(value).not.toBe('')
+  })
+})
+
 /* --------------------------------------------------------- bundle contract */
 
 describe('the built browser bundle', () => {
@@ -256,6 +305,15 @@ describe('the built browser bundle', () => {
     expect(source.startsWith('window.__ModuleLoader__.load({ id: "@tivility/dsh-session-share"')).toBe(true)
     expect(source).toContain('var module = { exports: {} }')
     expect(source).toContain('return module.exports; } });')
+  })
+
+  it.skipIf(source === '')('leaves the module-table packages external', () => {
+    // A require() the loader's table cannot answer throws at boot, and an
+    // inlined one ships a second copy of React or the whole primitives
+    // package into a plugin bundle.
+    const required = [...source.matchAll(/require\("([^"]+)"\)/g)].map(m => m[1])
+    expect(required).toEqual(expect.arrayContaining(['react', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives']))
+    expect(source).not.toContain('katex')
   })
 
   it.skipIf(source === '')('leaves no import the injected require cannot answer', () => {

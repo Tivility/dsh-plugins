@@ -60,10 +60,12 @@ export default defineConfig({
   sourcemap: true,
   // The node half's own output lives in this directory; a clean would wipe it.
   clean: false,
-  deps: {
-    neverBundle: (specifier: string) => EXTERNALS.has(specifier),
-    alwaysBundle: (specifier: string) => !EXTERNALS.has(specifier),
-  },
+  // `external`, not tsdown's `deps` heuristics: those classify by npm section,
+  // and everything the loader answers is a devDependency here (the runtime
+  // provides it, so declaring it a dependency would install a second copy).
+  // Left to `deps`, the whole primitives package — markdown, katex, fonts —
+  // gets inlined into a plugin bundle that must not contain it.
+  external: (id: string) => EXTERNALS.has(id),
   outputOptions: {
     entryFileNames: 'client.js',
     banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(ID)}, factory: (require) => {`,

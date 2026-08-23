@@ -36,12 +36,33 @@ Restricting what a visitor can reach is
 [`@tivility/dsh-readonly-auth`](../readonly-auth)'s job, and it does it at the
 API rather than in the DOM.
 
+## Getting a link
+
+A **Copy link** control in the session header, beside the session log. Its
+hover text is the URL itself — which is also how someone discovers the format
+exists.
+
+That control is the difference between a feature and a convention. Without it
+the link format reaches only the *model*, through the system prompt, and a
+person looking at the GUI is left to assemble a URL from a session id the
+interface never shows them.
+
+The origin comes from `window.location`, so the link is always the address this
+browser reached the harness at — loopback when that is how you opened it, the
+LAN address when it is not. Nothing to configure, and nothing that can drift
+from where the server actually answers.
+
+A refused clipboard write (denied permission, insecure context) leaves the
+button idle rather than claiming a copy that did not happen. The URL is in the
+hover text either way.
+
 ## How it works
 
 Two halves, which is what the harness's client-module system is for.
 
 **The browser half** reads `?session=`, waits for the session list, calls
-`sessions.open(id)`, then strips the parameter from the address bar.
+`sessions.open(id)`, then strips the parameter from the address bar. It also
+registers the header control into `conversation.session.header.utilities`.
 
 Two details carry their weight:
 

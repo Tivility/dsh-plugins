@@ -4,8 +4,19 @@
     "rootDir": "src",
     "outDir": "lib",
     "declarationDir": "lib/types",
-    "lib": ["ES2023", "DOM"]
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts"],
-  "references": [{ "path": "../web-kit" }]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "references": [
+    {
+      "path": "../web-kit"
+    }
+  ]
 }
