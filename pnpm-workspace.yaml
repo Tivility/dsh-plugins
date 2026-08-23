@@ -1,2 +1,26 @@
 packages:
   - packages/*
+
+# Pin the harness line to the release the target profile runs.
+#
+# Every published `@deepseek-ai/dsh-*` version is a prerelease, and a semver
+# range without an explicit prerelease tag does not match prereleases the way
+# it matches releases. So an unmet peer — which pnpm resolves on its own —
+# lands on the OLDEST version published rather than the newest.
+#
+# That is not cosmetic: in `0.0.1-rc.1` the web server's service is named
+# `httpServer`, and in `0.1.1-rc.2` it is `webServer`. A package built against
+# the wrong one compiles cleanly and then finds no service at runtime.
+#
+# Direct dependencies do not need pinning here — each manifest states its own
+# version. These are the transitively auto-installed peers that drifted.
+# `pnpm peers check` is what surfaces a new one; add it here when it appears.
+overrides:
+  '@deepseek-ai/dsh-attachment': 0.1.1-rc.2
+  '@deepseek-ai/dsh-brand': 0.1.1-rc.2
+  '@deepseek-ai/dsh-host-webserver': 0.1.1-rc.2
+  '@deepseek-ai/dsh-invariants': 0.1.1-rc.2
+  '@deepseek-ai/dsh-llm': 0.1.1-rc.2
+  '@deepseek-ai/dsh-scope': 0.1.1-rc.2
+  '@deepseek-ai/dsh-system-prompt': 0.1.1-rc.2
+  '@deepseek-ai/dsh-timeout': 0.1.1-rc.2

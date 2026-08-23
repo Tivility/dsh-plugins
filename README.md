@@ -55,6 +55,12 @@ are hard to diagnose:
   function plugin's namespace.
 - **Optional services are read with `ctx.get(name)`**, not the `ctx.<name>`
   property proxy, which is topology-sensitive.
+- **Pin the harness peer range; `"*"` does not mean "latest".** Every published
+  `@deepseek-ai/dsh-*` version is a prerelease, and a range does not match
+  prereleases the way it matches releases — `"*"` resolves to the *oldest* one
+  on offer. That is not cosmetic: in `0.0.1-rc.1` the web server's service is
+  named `httpServer`, and in `0.1.1-rc.2` it is `webServer`. A package built
+  against the wrong one compiles cleanly and then finds no service at runtime.
 
 ## License
 
