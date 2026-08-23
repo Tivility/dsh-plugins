@@ -1,6 +1,6 @@
 {
   "name": "@tivility/dsh-llm-affinity",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Put the DeepSeek Harness session id on the wire so a gateway can key per-conversation state.",
   "license": "MIT",
   "type": "module",
@@ -39,5 +39,8 @@
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-llm": "0.1.1-rc.2",
     "@deepseek-ai/schemastery": "*"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
