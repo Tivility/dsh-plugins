@@ -1,0 +1,272 @@
+import { createServer, request } from 'node:http'
+import type { IncomingMessage, Server, ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { canonicalize } from '@tivility/dsh-web-kit'
+import { apply, type Config } from '../src/index.ts'
+
+type Handler = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+
+/**
+ * Stand in for the parts of `Context` this plugin touches, and capture the
+ * route it registers.
+ */
+async function mount(config: Config, workspaces: readonly string[]): Promise<Handler> {
+  const settled: Promise<unknown>[] = []
+  let handler: Handler | undefined
+  const webServer = {
+    host: '127.0.0.1',
+    port: 3080,
+    register(route: { handler: Handler }) {
+      handler = route.handler
+      return () => {}
+    },
+  }
+  const ctx = {
+    webServer,
+    get(nameString: string) {
+      if (nameString === 'webServer') return webServer
+      if (nameString === 'workspaceRegistry') return { list: () => workspaces.map(path => ({ path })) }
+      return undefined
+    },
+    effect(run: () => unknown) {
+      settled.push(Promise.resolve(run()))
+      return () => {}
+    },
+    inject() {
+      return {}
+    },
+  }
+  apply(ctx as never, config)
+  await Promise.all(settled)
+  if (handler === undefined) throw new Error('the plugin registered no route')
+  return handler
+}
+
+let base: string
+let workspace: string
+let outside: string
+let server: Server
+let origin: string
+
+/** Fetch one viewer URL. */
+async function get(path: string, headers: Record<string, string> = {}): Promise<Response> {
+  return fetch(`${origin}${path}`, { headers })
+}
+
+/** One raw response, for assertions `fetch` cannot reach. */
+interface RawResponse {
+  readonly status: number
+  readonly body: string
+}
+
+/**
+ * Issue a request through node:http rather than fetch.
+ *
+ * `fetch` treats `Host` as a forbidden header and silently drops any attempt
+ * to set it — which is exactly the header the rebinding fence reads, so a
+ * fetch-based test of that fence would pass no matter what the fence did.
+ */
+async function rawGet(port: number, path: string, headers: Record<string, string>): Promise<RawResponse> {
+  return new Promise((resolve, reject) => {
+    const call = request({ host: '127.0.0.1', port, path, method: 'GET', headers }, (response) => {
+      const chunks: Buffer[] = []
+      response.on('data', (chunk: Buffer) => chunks.push(chunk))
+      response.on('end', () => {
+        resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') })
+      })
+    })
+    call.on('error', reject)
+    call.end()
+  })
+}
+
+beforeAll(async () => {
+  base = await canonicalize(await mkdtemp(join(tmpdir(), 'file-viewer-')))
+  workspace = join(base, 'project')
+  outside = join(base, 'private')
+  await mkdir(join(workspace, 'docs'), { recursive: true })
+  await mkdir(outside, { recursive: true })
+  await writeFile(join(workspace, 'README.md'), '# Project\n\nSee [docs](./docs/guide.md).\n')
+  await writeFile(join(workspace, 'docs', 'guide.md'), '# Guide\n')
+  await writeFile(join(workspace, 'notes.txt'), 'plain notes')
+  await writeFile(join(workspace, 'page.html'), '<script>alert(1)</script>')
+  await writeFile(join(workspace, 'blob.bin'), Buffer.from([0, 1, 2, 3, 0]))
+  await writeFile(join(outside, 'secret.txt'), 'do not read')
+  await symlink(join(outside, 'secret.txt'), join(workspace, 'leak'))
+
+  const handler = await mount({ route: '/files' }, [workspace])
+  server = createServer((req, res) => { void handler(req, res) })
+  await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+  origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+})
+
+afterAll(async () => {
+  await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+  await rm(base, { recursive: true, force: true })
+})
+
+describe('containment', () => {
+  it('refuses a path outside every root', async () => {
+    const response = await get(`/files${outside}/secret.txt`)
+    expect(response.status).toBe(403)
+  })
+
+  it('refuses a symlink that leaves the workspace', async () => {
+    const response = await get(`/files${workspace}/leak`)
+    expect(response.status).toBe(403)
+    expect(await response.text()).not.toContain('do not read')
+  })
+
+  it('refuses a traversal spelled with ..', async () => {
+    const response = await get(`/files${workspace}/../private/secret.txt`)
+    expect(response.status).toBe(403)
+  })
+
+  it('answers a missing file inside a root with 404', async () => {
+    const response = await get(`/files${workspace}/nope.txt`)
+    expect(response.status).toBe(404)
+  })
+
+  it('refuses a path carrying an encoded NUL', async () => {
+    const response = await get(`/files${workspace}/notes.txt%00.png`)
+    expect(response.status).toBe(400)
+  })
+})
+
+describe('browser-trust fence', () => {
+  it('refuses a rebound Host', async () => {
+    const port = (server.address() as AddressInfo).port
+    const response = await rawGet(port, '/files', { host: 'attacker.test' })
+    expect(response.status).toBe(403)
+    expect(response.body).not.toContain('project')
+  })
+
+  it('accepts a LAN authority the deployment declared', async () => {
+    const fenced = await mount({ route: '/files', trustedHosts: ['harness.lan'] }, [workspace])
+    const listener = createServer((req, res) => { void fenced(req, res) })
+    await new Promise<void>((resolve) => { listener.listen(0, '127.0.0.1', resolve) })
+    const port = (listener.address() as AddressInfo).port
+    expect((await rawGet(port, '/files', { host: 'harness.lan' })).status).toBe(200)
+    expect((await rawGet(port, '/files', { host: 'other.lan' })).status).toBe(403)
+    await new Promise<void>((resolve) => { listener.close(() => { resolve() }) })
+  })
+
+  it('refuses a cross-site initiator', async () => {
+    const response = await get('/files', { 'sec-fetch-site': 'cross-site' })
+    expect(response.status).toBe(403)
+  })
+
+  it('can be turned off by configuration', async () => {
+    const open = await mount({ route: '/files', fence: false }, [workspace])
+    const unfenced = createServer((req, res) => { void open(req, res) })
+    await new Promise<void>((resolve) => { unfenced.listen(0, '127.0.0.1', resolve) })
+    const port = (unfenced.address() as AddressInfo).port
+    expect((await rawGet(port, '/files', { host: 'attacker.test' })).status).toBe(200)
+    await new Promise<void>((resolve) => { unfenced.close(() => { resolve() }) })
+  })
+})
+
+describe('method gate', () => {
+  it('refuses anything that is not a read', async () => {
+    const response = await fetch(`${origin}/files`, { method: 'POST' })
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toBe('GET, HEAD')
+  })
+})
+
+describe('browsing', () => {
+  it('lists the roots at the route itself', async () => {
+    const response = await get('/files')
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect(html).toContain('project')
+    expect(html).toContain(workspace)
+  })
+
+  it('lists a directory with its entries', async () => {
+    const html = await (await get(`/files${workspace}`)).text()
+    expect(html).toContain('README.md')
+    expect(html).toContain('docs/')
+    expect(html).toContain('notes.txt')
+  })
+
+  it('renders Markdown and rewrites its relative links back into the route', async () => {
+    const html = await (await get(`/files${workspace}/README.md`)).text()
+    expect(html).toContain('<h1>Project</h1>')
+    expect(html).toContain(`href="/files${workspace}/docs/guide.md"`)
+  })
+
+  it('shows a text file as source', async () => {
+    const html = await (await get(`/files${workspace}/notes.txt`)).text()
+    expect(html).toContain('<pre><code>plain notes</code></pre>')
+  })
+
+  it('describes a binary file instead of dumping it', async () => {
+    const html = await (await get(`/files${workspace}/blob.bin`)).text()
+    expect(html).toContain('not shown inline')
+  })
+})
+
+describe('raw and download', () => {
+  it('serves text as text/plain under a sandbox policy', async () => {
+    const response = await get(`/files${workspace}/notes.txt?raw=1`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(response.headers.get('content-security-policy')).toBe('sandbox')
+    expect(await response.text()).toBe('plain notes')
+  })
+
+  it('never serves a workspace HTML file as HTML', async () => {
+    const response = await get(`/files${workspace}/page.html?raw=1`)
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(response.headers.get('content-security-policy')).toBe('sandbox')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
+  it('serves opaque bytes as an attachment', async () => {
+    const response = await get(`/files${workspace}/blob.bin?raw=1`)
+    expect(response.headers.get('content-type')).toBe('application/octet-stream')
+    expect(response.headers.get('content-disposition')).toBe('attachment')
+  })
+
+  it('offers a download under the file name', async () => {
+    const response = await get(`/files${workspace}/notes.txt?download=1`)
+    expect(response.headers.get('content-disposition')).toBe("attachment; filename*=UTF-8''notes.txt")
+    expect(await response.text()).toBe('plain notes')
+  })
+
+  it('supports byte ranges on the raw route', async () => {
+    const response = await get(`/files${workspace}/notes.txt?raw=1`, { range: 'bytes=0-4' })
+    expect(response.status).toBe(206)
+    expect(await response.text()).toBe('plain')
+  })
+})
+
+describe('roots', () => {
+  it('exposes nothing when workspaces are excluded and no roots are configured', async () => {
+    const empty = await mount({ route: '/files', workspaces: false }, [workspace])
+    const closed = createServer((req, res) => { void empty(req, res) })
+    await new Promise<void>((resolve) => { closed.listen(0, '127.0.0.1', resolve) })
+    const port = (closed.address() as AddressInfo).port
+    const index = await fetch(`http://127.0.0.1:${String(port)}/files`)
+    expect(await index.text()).toContain('nothing to browse')
+    const denied = await fetch(`http://127.0.0.1:${String(port)}/files${workspace}/notes.txt`)
+    expect(denied.status).toBe(403)
+    await new Promise<void>((resolve) => { closed.close(() => { resolve() }) })
+  })
+
+  it('exposes a configured root that is not a workspace', async () => {
+    const extra = await mount({ route: '/files', workspaces: false, roots: [outside] }, [])
+    const served = createServer((req, res) => { void extra(req, res) })
+    await new Promise<void>((resolve) => { served.listen(0, '127.0.0.1', resolve) })
+    const port = (served.address() as AddressInfo).port
+    const response = await fetch(`http://127.0.0.1:${String(port)}/files${outside}/secret.txt?raw=1`)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('do not read')
+    await new Promise<void>((resolve) => { served.close(() => { resolve() }) })
+  })
+})

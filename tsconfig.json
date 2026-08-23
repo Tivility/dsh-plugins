@@ -5,6 +5,9 @@
       "path": "./packages/web-kit"
     },
     {
+      "path": "./packages/file-viewer"
+    },
+    {
       "path": "./packages/llm-affinity"
     }
   ]
