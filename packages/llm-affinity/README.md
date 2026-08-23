@@ -65,6 +65,7 @@ Outside a wrapped stream the interceptor is a no-op, and it restores the previou
 | `bodyField` | unset | Also carry the value as a JSON body field — use `prompt_cache_key` for a gateway that reads affinity from the body. Costs a parse and re-serialize per call. |
 | `providers` | every route | Restrict to named provider routes. |
 | `origins` | every origin | Allowlist of `host` or `host:port` the header may be sent to. Set this if the process also talks to an endpoint that must not see the session id. |
+| `separateAuxiliary` | `true` | Give a compaction or session-title request its own value instead of the conversation's. It carries the same session id but a completely different prompt, so sharing the value pollutes a prompt cache keyed on it and lets an auxiliary turn disturb the conversation's turn state. Turn off for a gateway that must see one value per session. |
 
 Order the row **after** the adapter it should cover; the waterfall runs
 regardless of adapter identity, so only the `llm` service has to exist first.
@@ -77,6 +78,14 @@ regardless of adapter identity, so only the `llm` service has to exist first.
   untouched: they carry no session id.
 - `bodyField` rewrites only a string JSON body. A stream or typed-array body is
   passed through with the header alone.
+
+## Gateway expectations
+
+The value is stable for one conversation and unique across conversations — the two properties a gateway needs, whether it uses the key for prompt-cache routing, account stickiness, or per-conversation turn state.
+
+What the plugin deliberately does not do is guess what the gateway wants beyond that. It sends an identity; the gateway decides what to key on it. A gateway that reads none of the configured fields is unaffected — the header is inert.
+
+One caveat worth knowing before you enable this against a gateway that keys durable state on the value: a stable key is what *activates* per-conversation state, so a gateway whose per-conversation state handling is buggy will start failing on the second turn of a conversation where it previously never kept state at all. That is not a fault in this plugin, but it is a change in exposure. Verify a two-turn tool loop before rolling out.
 
 ## Known Limitations and Deferred Work
 

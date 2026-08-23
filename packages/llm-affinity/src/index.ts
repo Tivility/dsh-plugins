@@ -18,6 +18,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-llm'
 
 /** The resource argument of the platform `fetch`, whatever this runtime names it. */
@@ -32,6 +33,9 @@ interface AffinityScope {
 }
 
 const scopes = new AsyncLocalStorage<AffinityScope>()
+
+/** Defaults applied to an absent or partial {@link Config}. */
+const DEFAULT_HEADER = 'X-Session-ID'
 
 /** Cordis plugin name. */
 export const name = 'llm-affinity'
@@ -71,10 +75,37 @@ export interface Config {
    * process also talks to an endpoint that must not see the session id.
    */
   origins?: string[]
+  /**
+   * Whether an auxiliary request — compaction, session-title — gets its own
+   * affinity value rather than sharing the conversation's. It carries the same
+   * session id but a completely different prompt, so sharing the value pollutes
+   * a prompt cache keyed on it and, on a gateway that keys per-conversation turn
+   * state, lets an auxiliary turn disturb the conversation's. On by default;
+   * turn it off for a gateway that must see one value per session.
+   */
+  separateAuxiliary?: boolean
 }
 
-/** Defaults applied to an absent or partial {@link Config}. */
-const DEFAULT_HEADER = 'X-Session-ID'
+/** Runtime schema for {@link Config}. */
+export const Config: z<Config> = z.object({
+  header: z.string().default(DEFAULT_HEADER),
+  bodyField: z.string(),
+  providers: z.array(z.string()).default([]),
+  origins: z.array(z.string()).default([]),
+  separateAuxiliary: z.boolean().default(true),
+})
+
+/**
+ * Whether a value is safe to place in an HTTP header. A session id is an opaque
+ * branded id, but it crosses a wire boundary here: `Headers.set` throws on a
+ * control character, and a throw inside the interceptor would fail the whole
+ * model request instead of merely losing affinity.
+ * @param value - the candidate header value.
+ * @returns whether it can be sent verbatim.
+ */
+function wireSafeValue(value: string): boolean {
+  return value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value)
+}
 
 /**
  * Whether one request URL is allowed to receive the affinity header.
@@ -112,6 +143,7 @@ function decorate(
 ): RequestInit | undefined {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   if (!originAllowed(url, config.origins ?? [])) return init
+  if (!wireSafeValue(scope.sessionId)) return init
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
   headers.set(config.header, scope.sessionId)
   const next: RequestInit = { ...init, headers }
@@ -144,16 +176,16 @@ function decorate(
  * @param scope - the session scope to publish while pulling.
  * @returns the same chunks, pulled inside the scope.
  */
-async function* pullInScope(
-  inner: AsyncIterable<unknown>,
+async function* pullInScope<T>(
+  inner: AsyncIterable<T>,
   scope: AffinityScope,
-): AsyncIterable<never> {
+): AsyncIterable<T> {
   const iterator = inner[Symbol.asyncIterator]()
   try {
     while (true) {
       const result = await scopes.run(scope, () => iterator.next())
       if (result.done === true) return
-      yield result.value as never
+      yield result.value
     }
   } finally {
     // Consumer teardown (cancel, error, break) must reach the adapter, or a
@@ -194,6 +226,11 @@ export function apply(ctx: Context, config: Config = {}): void {
     const sessionId = options.sessionId
     if (sessionId === undefined) return next()
     if (routes.size > 0 && !routes.has(options.provider)) return next()
-    return pullInScope(next(), { sessionId: String(sessionId), provider: options.provider })
+    // An auxiliary request shares the conversation's session id but not its
+    // prompt, so by default it gets a distinct value; see `separateAuxiliary`.
+    const suffix = resolved.separateAuxiliary !== false && options.purpose !== undefined
+      ? `:${options.purpose}`
+      : ''
+    return pullInScope(next(), { sessionId: `${String(sessionId)}${suffix}`, provider: options.provider })
   })
 }

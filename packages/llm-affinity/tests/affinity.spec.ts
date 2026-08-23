@@ -1,97 +1,143 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { apply, type Config } from '../src/index.ts'
 
-/** Minimal stand-in for the parts of `Context` this plugin touches. */
-function fakeCtx() {
+/** One captured outgoing request. */
+interface Captured { url: string; headers: Headers; body: unknown }
+
+/**
+ * Stand-in for the parts of `Context` this plugin touches, plus a stream driver
+ * that makes its request from inside the generator body — the position a real
+ * adapter makes it from, and the one a scope entered at creation time misses.
+ */
+function harness(config: Config = {}) {
   const listeners: Array<(options: any, next: () => AsyncIterable<unknown>) => AsyncIterable<unknown>> = []
   const disposers: Array<() => void> = []
+  const ctx = {
+    on(event: string, listener: any) { if (event === 'llm/stream') listeners.push(listener); return () => {} },
+    effect(install: () => () => void) { disposers.push(install()); return () => {} },
+  } as any
+
+  const original = globalThis.fetch
+  const seen: Captured[] = []
+  globalThis.fetch = (async (input: any, init: any) => {
+    seen.push({ url: String(input), headers: new Headers(init?.headers ?? {}), body: init?.body })
+    return new Response('{}')
+  }) as any
+
+  apply(ctx, config)
+
   return {
-    ctx: {
-      on(event: string, listener: any) {
-        if (event === 'llm/stream') listeners.push(listener)
-        return () => {}
-      },
-      effect(install: () => () => void) {
-        disposers.push(install())
-        return () => {}
-      },
-    } as any,
-    stream(options: any, chunks: unknown[]) {
-      const inner = (async function* () { for (const c of chunks) yield c })()
-      return listeners[0]!(options, () => inner)
+    seen,
+    /** Drive one wrapped stream whose body fetches, exactly like an adapter. */
+    async run(options: any, url = 'https://gw.example/v1/chat/completions', body?: string) {
+      const inner = (async function* () {
+        await globalThis.fetch(url, { method: 'POST', ...body === undefined ? {} : { body } })
+        yield 'chunk'
+      })()
+      const out: unknown[] = []
+      for await (const c of listeners[0]!(options, () => inner)) out.push(c)
+      return out
     },
-    dispose() { for (const d of disposers) d() },
+    dispose() { for (const d of disposers) d(); globalThis.fetch = original },
   }
 }
 
-async function drain(it: AsyncIterable<unknown>): Promise<unknown[]> {
-  const out: unknown[] = []
-  for await (const c of it) out.push(c)
-  return out
-}
-
-function install(config?: Config) {
-  const original = globalThis.fetch
-  const seen: Array<{ url: string; headers: Headers; body: unknown }> = []
-  globalThis.fetch = (async (input: any, init: any) => {
-    seen.push({
-      url: String(input),
-      headers: new Headers(init?.headers ?? {}),
-      body: init?.body,
-    })
-    return new Response('{}')
-  }) as any
-  const harness = fakeCtx()
-  apply(harness.ctx, config ?? {})
-  return { harness, seen, restore: () => { harness.dispose(); globalThis.fetch = original } }
-}
-
 describe('llm-affinity', () => {
-  afterEach(() => { vi.restoreAllMocks() })
-
-  it('sends the session id while the stream is pulled', async () => {
-    const { harness, seen, restore } = install()
-    const chunks = await drain(harness.stream(
-      { sessionId: 'sess-abc', provider: 'cpa-gemini' },
-      [(await globalThis.fetch('https://gw.example/v1/chat/completions', { method: 'POST' }), 'a')],
-    ))
-    expect(chunks).toEqual(['a'])
-    restore()
-    expect(seen).toHaveLength(1)
+  it('puts the session id on a request the stream body makes', async () => {
+    const h = harness()
+    const out = await h.run({ sessionId: 'sess-abc', provider: 'p' })
+    h.dispose()
+    expect(out).toEqual(['chunk'])
+    expect(h.seen).toHaveLength(1)
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBe('sess-abc')
   })
 
-  it('adds the header to a request made from inside the stream', async () => {
-    const { harness, seen, restore } = install()
-    const inner = harness.stream({ sessionId: 'sess-abc', provider: 'p' }, [])
-    const it = inner[Symbol.asyncIterator]()
-    // The generator body — and any request it makes — runs on this pull.
-    const pulled = it.next().then(async () => {
-      await globalThis.fetch('https://gw.example/v1/messages', { method: 'POST', body: '{"model":"m"}' })
-    })
-    await pulled
-    restore()
+  it('honours a configured header name', async () => {
+    const h = harness({ header: 'X-Conversation' })
+    await h.run({ sessionId: 'sess-abc', provider: 'p' })
+    h.dispose()
+    expect(h.seen[0]!.headers.get('X-Conversation')).toBe('sess-abc')
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBeNull()
   })
 
-  it('leaves requests outside a stream untouched', async () => {
-    const { seen, restore } = install()
+  it('separates an auxiliary request from its conversation', async () => {
+    const h = harness()
+    await h.run({ sessionId: 'sess-abc', provider: 'p', purpose: 'compaction' })
+    h.dispose()
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBe('sess-abc:compaction')
+  })
+
+  it('shares one value when separateAuxiliary is off', async () => {
+    const h = harness({ separateAuxiliary: false })
+    await h.run({ sessionId: 'sess-abc', provider: 'p', purpose: 'compaction' })
+    h.dispose()
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBe('sess-abc')
+  })
+
+  it('adds the body field when configured', async () => {
+    const h = harness({ bodyField: 'prompt_cache_key' })
+    await h.run({ sessionId: 'sess-abc', provider: 'p' }, 'https://gw.example/v1/x', '{"model":"m"}')
+    h.dispose()
+    expect(JSON.parse(String(h.seen[0]!.body))).toEqual({ model: 'm', prompt_cache_key: 'sess-abc' })
+  })
+
+  it('restricts to configured providers', async () => {
+    const h = harness({ providers: ['only-this'] })
+    await h.run({ sessionId: 'sess-abc', provider: 'other' })
+    h.dispose()
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBeNull()
+  })
+
+  it('restricts to configured origins', async () => {
+    const h = harness({ origins: ['allowed.example'] })
+    await h.run({ sessionId: 'sess-abc', provider: 'p' }, 'https://other.example/v1/x')
+    h.dispose()
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBeNull()
+  })
+
+  it('drops a session id that cannot be a header value', async () => {
+    const h = harness()
+    await h.run({ sessionId: 'bad\nvalue', provider: 'p' })
+    h.dispose()
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBeNull()
+  })
+
+  it('leaves a request made outside a stream untouched', async () => {
+    const h = harness()
     await globalThis.fetch('https://gw.example/v1/models')
-    restore()
-    expect(seen[0]!.headers.get('X-Session-ID')).toBeNull()
+    h.dispose()
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBeNull()
   })
 
-  it('passes through a request with no session id', async () => {
-    const { harness, restore } = install()
-    const out = await drain(harness.stream({ provider: 'p' }, ['x']))
-    restore()
-    expect(out).toEqual(['x'])
+  it('passes a request with no session id straight through', async () => {
+    const h = harness()
+    const out = await h.run({ provider: 'p' })
+    h.dispose()
+    expect(out).toEqual(['chunk'])
+    expect(h.seen[0]!.headers.get('X-Session-ID')).toBeNull()
+  })
+
+  it('propagates consumer teardown to the adapter', async () => {
+    const h = harness()
+    let returned = false
+    const listeners: any[] = []
+    const ctx = { on: (e: string, l: any) => { if (e === 'llm/stream') listeners.push(l); return () => {} },
+                  effect: (i: () => () => void) => { i(); return () => {} } } as any
+    apply(ctx, {})
+    const inner = { [Symbol.asyncIterator]: () => ({
+      next: async () => ({ done: false, value: 'x' }),
+      return: async () => { returned = true; return { done: true, value: undefined } },
+    }) } as AsyncIterable<string>
+    for await (const _ of listeners[0]({ sessionId: 's', provider: 'p' }, () => inner)) break
+    h.dispose()
+    expect(returned).toBe(true)
   })
 
   it('restores the previous fetch on disposal', () => {
     const before = globalThis.fetch
-    const harness = fakeCtx()
-    apply(harness.ctx, {})
+    const h = harness()
     expect(globalThis.fetch).not.toBe(before)
-    harness.dispose()
+    h.dispose()
     expect(globalThis.fetch).toBe(before)
   })
 })
