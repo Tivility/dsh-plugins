@@ -41,6 +41,23 @@ field onto the parent's:
 So naming a model is normally enough; `provider` matters only when the model
 lives on a route the parent is not using.
 
+### Naming only `model` inherits a *creation-time* route
+
+The harness builds a child's options from `parent.options`, which is the route
+the parent agent was **created** with. Switching a session's model afterwards —
+the model picker, `session.selectModel` — overrides the request through a
+waterfall and does not rewrite `parent.options`. So a parent visibly running on
+one provider can hand its child a different one.
+
+Live, that looks like a child failing with `UNKNOWN_MODEL`: the call named
+`model` alone, the child inherited a provider that has never heard of it, and
+nothing in the parent's own display hinted at the mismatch.
+
+This is the packaged delegation tool's behaviour too — it reads the same
+options. The practical rule: **when a model lives on a route other than the
+deployment default, name `provider` with it.** Saying so in `routingGuide` is
+the cheapest fix, because that is the text the model reads while choosing.
+
 ## `effort` needed its own seam
 
 `AgentOptions` is `provider`, `model`, `maxTokens` — there is no effort field,

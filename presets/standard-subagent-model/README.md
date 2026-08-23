@@ -73,6 +73,12 @@ because the model will follow it. Something like:
 
 ## Three things worth knowing
 
+**Name `provider` alongside `model` when they differ from the default.** A
+child inherits the route its parent agent was *created* with, not the one the
+session was later switched to — so `model` alone can land on a provider that
+has never heard of it. Put the pairing in `routingGuide`; that is the text the
+model reads while choosing.
+
 **Effort applies to one delegation.** The harness copies only `provider`,
 `model`, and `maxTokens` from a parent's options to a child's, so a subagent
 that delegates further does not inherit its own effort — it names one or gets
