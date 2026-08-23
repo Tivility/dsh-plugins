@@ -1,0 +1,3 @@
+name: 标准模式 + 子代理选模型
+description: 与标准模式完全相同，但每次调用 subagent / subagent_fork 时可以单独指定子代理使用的 provider 和 model；不指定则继承主 agent 的模型路由。
+order: 2

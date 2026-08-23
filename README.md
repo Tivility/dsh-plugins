@@ -17,16 +17,26 @@ and says so alongside the reason this repository exists:
 | Package | What it does |
 | ------- | ------------ |
 | [`@tivility/dsh-llm-affinity`](packages/llm-affinity) | Puts the harness session id on the wire so a gateway can key per-conversation state (prompt cache, account stickiness, Gemini `thoughtSignature` replay) |
-| [`@tivility/dsh-web-kit`](packages/web-kit) | **Library, not a plugin.** The browser-trust fence, path containment, and static-response plumbing the four web plugins share |
 | [`@tivility/dsh-file-viewer`](packages/file-viewer) | Read-only browser preview of workspace files: listings, rendered Markdown, inline media, raw bytes |
 | [`@tivility/dsh-readonly-auth`](packages/readonly-auth) | Owner lock for a deployment more than one person can reach; provides the `ownerAuth` service |
 | [`@tivility/dsh-file-upload`](packages/file-upload) | Drag-and-drop upload into a workspace, gated by `ownerAuth` when it is installed |
 | [`@tivility/dsh-session-share`](packages/session-share) | A link that opens one session instead of wherever the GUI was left |
+| [`@tivility/dsh-tool-subagent-model`](packages/tool-subagent-model) | Delegation with per-call `model` / `provider` / `effort`, so one conversation can dispatch subtasks across a fleet |
+| [`@tivility/dsh-web-kit`](packages/web-kit) | **Library, not a plugin.** The browser-trust fence, path containment, and static-response plumbing the four web plugins share |
 
 The four web plugins solve one problem between them: the harness's GUI is
 reachable from another machine, and nothing that machine can see is a file, a
 lock, or a link. Each is useful alone; installed together, `readonly-auth`
 becomes the lock the other two consult.
+
+### Presets
+
+`presets/` holds agent presets rather than packages — a preset is a directory
+the harness reads from `$DSH_HOME/.agent-presets`, not something npm installs.
+
+| Preset | What it does |
+| ------ | ------------ |
+| [`standard-subagent-model`](presets/standard-subagent-model) | The shipped `standard` preset, with its two delegation rows pointed at `@tivility/dsh-tool-subagent-model` |
 
 ## Install into a profile
 

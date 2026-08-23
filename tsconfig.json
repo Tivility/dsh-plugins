@@ -18,6 +18,9 @@
     },
     {
       "path": "./packages/session-share"
+    },
+    {
+      "path": "./packages/tool-subagent-model"
     }
   ]
 }
