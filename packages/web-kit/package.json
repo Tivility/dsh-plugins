@@ -10,7 +10,8 @@
     ".": {
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "README.md",

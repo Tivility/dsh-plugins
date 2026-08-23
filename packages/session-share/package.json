@@ -14,7 +14,8 @@
     "./client": {
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "README.md",
