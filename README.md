@@ -19,6 +19,7 @@ and says so alongside the reason this repository exists:
 | [`@tivility/dsh-llm-affinity`](packages/llm-affinity) | Puts the harness session id on the wire so a gateway can key per-conversation state (prompt cache, account stickiness, Gemini `thoughtSignature` replay) |
 | [`@tivility/dsh-web-kit`](packages/web-kit) | **Library, not a plugin.** The browser-trust fence, path containment, and static-response plumbing the four web plugins share |
 | [`@tivility/dsh-file-viewer`](packages/file-viewer) | Read-only browser preview of workspace files: listings, rendered Markdown, inline media, raw bytes |
+| [`@tivility/dsh-readonly-auth`](packages/readonly-auth) | Owner lock for a deployment more than one person can reach; provides the `ownerAuth` service |
 
 ## Install into a profile
 

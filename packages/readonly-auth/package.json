@@ -1,0 +1,45 @@
+{
+  "name": "@tivility/dsh-readonly-auth",
+  "version": "0.1.0",
+  "description": "Owner lock for a DeepSeek Harness web deployment: unlocked visitors read, the owner drives. Provides the ownerAuth service.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "README.md",
+    "lib/**",
+    "src/**"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "auth",
+    "readonly",
+    "lan"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tivility/dsh-plugins.git",
+    "directory": "packages/readonly-auth"
+  },
+  "dependencies": {
+    "@tivility/dsh-web-kit": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-host-webserver": "0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "*"
+  }
+}
