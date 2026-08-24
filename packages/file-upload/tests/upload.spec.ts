@@ -34,10 +34,11 @@ async function mount(
   config: Config,
   workspaces: readonly string[],
   auth: { current: FakeAuth | undefined },
+  options: { webServer?: boolean } = {},
 ): Promise<Mounted> {
   const settled: Promise<unknown>[] = []
   let handler: Handler | undefined
-  const webServer = {
+  const carrier = {
     host: '127.0.0.1',
     port: 3080,
     register(route: { handler: Handler }) {
@@ -45,6 +46,7 @@ async function mount(
       return () => {}
     },
   }
+  const webServer = options.webServer === false ? undefined : carrier
   const ctx = {
     webServer,
     get(nameString: string) {
@@ -56,6 +58,12 @@ async function mount(
     effect(run: () => unknown) {
       settled.push(Promise.resolve(run()))
       return () => {}
+    },
+    // Mirrors cordis: the callback runs only once every named service is
+    // present, which is exactly what a headless profile does not do.
+    inject(names: string[], run: (scope: unknown) => void) {
+      if (names.every(n => ctx.get(n) !== undefined)) run(ctx)
+      return {}
     },
   }
   apply(ctx as never, config)
@@ -221,6 +229,32 @@ describe('the optional lock', () => {
       expect(html).toContain('owner grant')
     } finally {
       auth.current = undefined
+    }
+  })
+})
+
+describe('a profile with no HTTP server (issue #1)', () => {
+  it('activates and registers no route, instead of holding the tree pending', async () => {
+    await expect(mount({ route: '/upload' }, [workspace], auth, { webServer: false }))
+      .rejects.toThrow(/registered no route/)
+  })
+
+  it('refuses a malformed public origin at activation', async () => {
+    await expect(mount({ publicBaseUrl: 'https://a.test?x=1' }, [workspace], auth))
+      .rejects.toThrow(/publicBaseUrl/)
+  })
+})
+
+describe('a public origin in front of the local bind (issue #3)', () => {
+  it('builds the preview link on the configured origin', async () => {
+    const proxied = await mount(
+      { route: '/upload', publicBaseUrl: 'https://dsh.example.com' }, [workspace], auth)
+    try {
+      const response = await put(proxied.origin, `${workspace}/inbox/proxied.txt`, 'x')
+      const body = await response.json() as { url: string }
+      expect(body.url).toBe(`https://dsh.example.com/files${workspace.split('/').map(encodeURIComponent).join('/')}/inbox/proxied.txt`)
+    } finally {
+      await proxied.close()
     }
   })
 })

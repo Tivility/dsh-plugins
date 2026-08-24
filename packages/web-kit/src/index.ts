@@ -22,7 +22,9 @@ export { isPathUnder, canonicalize, resolveUnderRoots } from './containment.js'
 
 export { canonicalizeRoots, workspaceRoots, collectRoots } from './roots.js'
 
-export { resolveBaseUrl, absoluteUrl } from './base-url.js'
+export {
+  resolveBaseUrl, resolvePublicBaseUrl, normalizePublicBaseUrl, absoluteUrl, PUBLIC_BASE_URL_ENV,
+} from './base-url.js'
 
 export {
   MIME, mimeFor, isInlineSafe, etagFor, isFresh, parseRange,

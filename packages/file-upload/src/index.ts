@@ -46,6 +46,7 @@ import {
   escapeHtml,
   isPathUnder,
   isTrustedRequest,
+  normalizePublicBaseUrl,
   page,
   sendHtml,
   sendJson,
@@ -55,8 +56,13 @@ import {
 /** Stable Cordis plugin name. */
 export const name = 'file-upload'
 
-/** The HTTP carrier this plugin mounts its route on. */
-export const inject = ['webServer']
+/**
+ * Nothing hard. The route needs `webServer`, but requiring it here would make
+ * this row a startup failure in every profile that serves no HTTP — and a
+ * plugin suite installed once in the home overlay is exactly how that happens.
+ * The route mounts through a nested injection instead.
+ */
+export const inject: string[] = []
 
 /** Plugin configuration. */
 export interface Config {
@@ -77,6 +83,12 @@ export interface Config {
    * in the upload response. Empty means no link is offered.
    */
   viewerRoute?: string
+  /**
+   * The origin browsers actually reach this deployment at, when that is not
+   * the local bind — behind a reverse proxy, tunnel, or port forwarder. The
+   * preview link in the upload response is built on it. Origin only.
+   */
+  publicBaseUrl?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -87,6 +99,7 @@ export const Config: z<Config> = z.object({
   fence: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
   viewerRoute: z.string().default('/files'),
+  publicBaseUrl: z.string().default(''),
 })
 
 /** Configuration with every default applied. */
@@ -98,6 +111,7 @@ interface Resolved {
   readonly fence: boolean
   readonly trustedHosts: readonly string[]
   readonly viewerRoute: string
+  readonly publicBaseUrl: string
 }
 
 /** The one method this plugin calls on the optional lock. */
@@ -125,6 +139,7 @@ function resolveConfig(config: Config): Resolved {
     fence: config.fence ?? true,
     trustedHosts: config.trustedHosts ?? [],
     viewerRoute: config.viewerRoute ?? '/files',
+    publicBaseUrl: config.publicBaseUrl ?? '',
   }
 }
 
@@ -378,7 +393,7 @@ function createHandler(
       bytes: written.bytes,
       ...config.viewerRoute === ''
         ? {}
-        : { url: `${absoluteUrl(ctx, config.viewerRoute)}${destination.path.split('/').map(encodeURIComponent).join('/')}` },
+        : { url: `${absoluteUrl(ctx, config.viewerRoute, config.publicBaseUrl)}${destination.path.split('/').map(encodeURIComponent).join('/')}` },
     })
   }
 }
@@ -390,12 +405,20 @@ function createHandler(
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const resolved = resolveConfig(config)
-  ctx.effect(async () => {
-    const staticRoots = await canonicalizeRoots(resolved.roots)
-    return ctx.webServer.register({
-      kind: 'prefix',
-      path: resolved.route,
-      handler: createHandler(ctx, resolved, staticRoots),
-    })
-  }, `file-upload: ${resolved.route} route`)
+  // Validate a configured origin at activation: a typo should stop the load,
+  // not quietly hand back preview links nobody can open.
+  if (resolved.publicBaseUrl !== '') normalizePublicBaseUrl(resolved.publicBaseUrl)
+
+  // Nested, so a profile with no HTTP server activates this row and simply
+  // offers no upload route.
+  ctx.inject(['webServer'], (web) => {
+    web.effect(async () => {
+      const staticRoots = await canonicalizeRoots(resolved.roots)
+      return web.webServer.register({
+        kind: 'prefix',
+        path: resolved.route,
+        handler: createHandler(web, resolved, staticRoots),
+      })
+    }, `file-upload: ${resolved.route} route`)
+  })
 }

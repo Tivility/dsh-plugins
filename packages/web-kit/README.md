@@ -45,7 +45,9 @@ same disclaimer on its own copy. Access control belongs to a lock such as
 | `isPathUnder(path, root)` | Lexical fast path, filesystem-identity fallback for alias spellings |
 | `resolveUnderRoots(target, roots)` | The two above, composed into the check a route actually makes |
 | `canonicalizeRoots` / `workspaceRoots` / `collectRoots` | Configured roots resolved once; workspaces read live |
-| `resolveBaseUrl(ctx)` / `absoluteUrl(ctx, path)` | The origin this server answers on, derived the way the harness derives it |
+| `resolvePublicBaseUrl(ctx, configured?)` | The public origin: explicit config, then `DSH_PUBLIC_BASE_URL`, then the local bind; `undefined` when nothing can answer |
+| `normalizePublicBaseUrl(value)` | Validate a configured origin — absolute http(s), no credentials/query/fragment/path |
+| `resolveBaseUrl(ctx, configured?)` / `absoluteUrl(ctx, path, configured?)` | The same, but failing loudly instead of returning `undefined` |
 | `serveFile(req, res, file, opts)` | ETag/304, `Range`/206/416, `If-Range`, HEAD, `Content-Disposition` |
 | `mimeFor` / `isInlineSafe` / `etagFor` / `isFresh` / `parseRange` | The pieces `serveFile` is built from |
 | `sendStatus` / `sendBody` / `sendHtml` / `sendJson` / `assertReadMethod` | Small senders, with `nosniff` and `no-referrer` on every response |

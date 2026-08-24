@@ -1,6 +1,6 @@
 {
   "name": "@tivility/dsh-session-share",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Link straight to one DeepSeek Harness session: the GUI opens on it instead of wherever it was left.",
   "license": "MIT",
   "type": "module",

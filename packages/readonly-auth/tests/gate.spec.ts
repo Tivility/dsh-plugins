@@ -217,3 +217,33 @@ describe('configuration', () => {
     await expect(fiber).rejects.toThrow(/not set in this process/)
   })
 })
+
+describe('a profile with no HTTP server (issue #1)', () => {
+  it('activates instead of holding the tree pending', async () => {
+    // Softening the requirement is only safe because it cannot produce a
+    // deployment that LOOKS locked and is not: with no webServer there is no
+    // /api to reach and no route left open.
+    const bare = new Context()
+    const fiber = bare.plugin(OwnerAuthService, { token: TOKEN })
+    await expect(fiber).resolves.toBeDefined()
+    expect(bare.get('ownerAuth')).toBeDefined()
+    await bare.fiber.dispose()
+  })
+
+  it('still refuses to start without a token, web server or not', async () => {
+    const bare = new Context()
+    await expect(bare.plugin(OwnerAuthService, {})).rejects.toThrow(/no owner token configured/)
+    await bare.fiber.dispose()
+  })
+
+  it('still gates when a web server is present', async () => {
+    // The fail-closed half: presence of a carrier means the gate installs, or
+    // activation throws. It never installs silently doing nothing.
+    const unmount = await mountLock()
+    try {
+      expect((await post('/api/session.prompt')).status).toBe(403)
+    } finally {
+      await unmount()
+    }
+  })
+})

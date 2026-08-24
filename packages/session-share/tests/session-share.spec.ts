@@ -17,10 +17,13 @@ let port: number
 let promptText: (agent: unknown) => string
 
 /** Stand in for the parts of `Context` the node half touches. */
-function mount(config: Config): { handler: Handler | undefined, prompt: (agent: unknown) => string } {
+function mount(
+  config: Config,
+  options: { webServer?: boolean } = {},
+): { handler: Handler | undefined, prompt: (agent: unknown) => string } {
   let handler: Handler | undefined
   let section: { text(context: unknown): string } | undefined
-  const webServer = {
+  const server = {
     host: '127.0.0.1',
     port: 3080,
     register(route: { handler: Handler }) {
@@ -28,15 +31,19 @@ function mount(config: Config): { handler: Handler | undefined, prompt: (agent: 
       return () => {}
     },
   }
+  const webServer = options.webServer === false ? undefined : server
   const ctx = {
     webServer,
-    get: (nameString: string) => nameString === 'webServer' ? webServer : undefined,
+    get: (nameString: string) => nameString === 'webServer' ? webServer
+      : nameString === 'systemPrompt' ? ctx.systemPrompt : undefined,
     effect(run: () => unknown) {
       run()
       return () => {}
     },
-    inject(_names: string[], run: (scope: unknown) => void) {
-      run(ctx)
+    // Mirrors cordis: the callback runs only once every named service is
+    // present, which is exactly what a headless profile does not do.
+    inject(names: string[], run: (scope: unknown) => void) {
+      if (names.every(n => ctx.get(n) !== undefined)) run(ctx)
       return {}
     },
     systemPrompt: {
@@ -321,5 +328,38 @@ describe('the built browser bundle', () => {
     // the table cannot answer throws at boot.
     expect(/^\s*import[ {]/m.test(source)).toBe(false)
     expect(source).toContain('exports.apply')
+  })
+})
+
+describe('a profile with no HTTP server (issues #1 and #2)', () => {
+  it('activates and registers no redirect, instead of holding the tree pending', () => {
+    expect(mount({ route: '/s' }, { webServer: false }).handler).toBeUndefined()
+  })
+
+  it('teaches no link without an origin to name', () => {
+    const { prompt } = mount({ route: '/s' }, { webServer: false })
+    expect(prompt({ session: { id: 'sess-42' } })).toBe('')
+  })
+
+  it('teaches the configured public origin when given one', () => {
+    const { prompt } = mount(
+      { route: '/s', publicBaseUrl: 'https://dsh.example.com' }, { webServer: false })
+    const text = prompt({ session: { id: 'sess-42' } })
+    expect(text).toContain(`https://dsh.example.com/?${SESSION_PARAM}=sess-42`)
+    expect(text).toContain('https://dsh.example.com/s/sess-42')
+    expect(text).not.toContain('127.0.0.1')
+  })
+
+  it('refuses a malformed public origin at activation', () => {
+    expect(() => mount({ publicBaseUrl: 'ftp://nope' })).toThrow(/publicBaseUrl/)
+  })
+})
+
+describe('a public origin in front of the local bind (issue #3)', () => {
+  it('outranks the bind for the link the model is taught', () => {
+    const { prompt } = mount({ route: '/s', publicBaseUrl: 'http://10.37.245.206:3081' })
+    const text = prompt({ session: { id: 'sess-42' } })
+    expect(text).toContain('http://10.37.245.206:3081/?session=sess-42')
+    expect(text).not.toContain('127.0.0.1:3080')
   })
 })

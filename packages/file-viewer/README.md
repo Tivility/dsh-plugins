@@ -105,6 +105,35 @@ needs it for `/api`:
     trustedHosts: ['192.168.1.9']
 ```
 
+## Profile scope, and links behind a proxy
+
+**This row is safe in any profile.** It activates without `webServer` and
+simply serves nothing, so a suite installed once in `$DSH_HOME/cordis.patch.yml`
+does not turn a Web feature into a headless startup failure.
+
+**`publicBaseUrl` is the origin browsers actually reach.** The local bind is
+not the public origin behind a reverse proxy, tunnel, port forwarder, or TLS
+terminator, and no inference recovers one — so a deployment that has one says
+so:
+
+```yaml
+    publicBaseUrl: https://dsh.example.com
+```
+
+Origin only: scheme, host, optional port. Credentials, queries, fragments, and
+path prefixes are refused at activation rather than half-supported — every
+route is appended whole, so a prefix would vanish from the middle of each link.
+`DSH_PUBLIC_BASE_URL` sets it process-wide; explicit configuration outranks it.
+
+Forwarded headers are deliberately never consulted: `Host` and `X-Forwarded-*`
+are attacker-controlled on any request that reaches the server, so trusting
+them would let a visitor choose the origin the model puts in front of a user.
+
+With no `webServer` **and** no `publicBaseUrl`, the prompt section renders
+nothing rather than naming a loopback address — in a headless profile that
+would point at a server which is not running. Configure the origin of the Web
+profile serving the same data and headless agents can link into it.
+
 ## Pairing
 
 Install alongside [`@tivility/dsh-readonly-auth`](../readonly-auth) to put the

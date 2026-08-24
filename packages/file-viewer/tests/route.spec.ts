@@ -14,10 +14,33 @@ type Handler = (req: IncomingMessage, res: ServerResponse) => void | Promise<voi
  * Stand in for the parts of `Context` this plugin touches, and capture the
  * route it registers.
  */
-async function mount(config: Config, workspaces: readonly string[]): Promise<Handler> {
+async function mount(
+  config: Config,
+  workspaces: readonly string[],
+  options: { webServer?: boolean } = {},
+): Promise<Handler> {
+  const handler = await mountMaybe(config, workspaces, options)
+  if (handler === undefined) throw new Error('the plugin registered no route')
+  return handler
+}
+
+/** Mount and return the text of the prompt section the plugin registered. */
+async function promptFor(config: Config, options: { webServer?: boolean } = {}): Promise<string> {
+  let text = ''
+  await mountMaybe(config, [], options, (render) => { text = render })
+  return text
+}
+
+/** Mount without requiring a route: a headless composition registers none. */
+async function mountMaybe(
+  config: Config,
+  workspaces: readonly string[],
+  options: { webServer?: boolean } = {},
+  onPrompt?: (text: string) => void,
+): Promise<Handler | undefined> {
   const settled: Promise<unknown>[] = []
   let handler: Handler | undefined
-  const webServer = {
+  const server = {
     host: '127.0.0.1',
     port: 3080,
     register(route: { handler: Handler }) {
@@ -25,10 +48,19 @@ async function mount(config: Config, workspaces: readonly string[]): Promise<Han
       return () => {}
     },
   }
+  const webServer = options.webServer === false ? undefined : server
+  const systemPrompt = {
+    section(spec: { text(context: unknown): string }) {
+      onPrompt?.(spec.text({ scope: {} }))
+      return () => {}
+    },
+  }
   const ctx = {
     webServer,
+    systemPrompt,
     get(nameString: string) {
       if (nameString === 'webServer') return webServer
+      if (nameString === 'systemPrompt') return systemPrompt
       if (nameString === 'workspaceRegistry') return { list: () => workspaces.map(path => ({ path })) }
       return undefined
     },
@@ -36,13 +68,15 @@ async function mount(config: Config, workspaces: readonly string[]): Promise<Han
       settled.push(Promise.resolve(run()))
       return () => {}
     },
-    inject() {
+    // Mirrors cordis: the callback runs only once every named service is
+    // present, which is exactly what a headless profile does not do.
+    inject(names: string[], run: (scope: unknown) => void) {
+      if (names.every(n => ctx.get(n) !== undefined)) run(ctx)
       return {}
     },
   }
   apply(ctx as never, config)
   await Promise.all(settled)
-  if (handler === undefined) throw new Error('the plugin registered no route')
   return handler
 }
 
@@ -268,5 +302,44 @@ describe('roots', () => {
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('do not read')
     await new Promise<void>((resolve) => { served.close(() => { resolve() }) })
+  })
+})
+
+describe('a profile with no HTTP server (issues #1 and #2)', () => {
+  it('activates and registers no route, instead of holding the tree pending', async () => {
+    // A web-only row in the home overlay used to make every headless profile
+    // fail to boot: the entry stayed pending on `webServer` forever.
+    await expect(mountMaybe({ route: '/files' }, [workspace], { webServer: false }))
+      .resolves.toBeUndefined()
+  })
+
+  it('teaches no link format without an origin to name', async () => {
+    const text = await promptFor({ route: '/files' }, { webServer: false })
+    // A guessed loopback link points at a server that is not running.
+    expect(text).toBe('')
+  })
+
+  it('teaches the configured public origin when given one', async () => {
+    const text = await promptFor(
+      { route: '/files', publicBaseUrl: 'https://dsh.example.com' }, { webServer: false })
+    expect(text).toContain('https://dsh.example.com/files')
+    expect(text).not.toContain('127.0.0.1')
+  })
+
+  it('refuses a malformed public origin at activation', async () => {
+    await expect(mountMaybe({ publicBaseUrl: 'not-a-url' }, [workspace], { webServer: false }))
+      .rejects.toThrow(/publicBaseUrl/)
+  })
+})
+
+describe('a public origin in front of the local bind (issue #3)', () => {
+  it('outranks the bind for the links the model is taught', async () => {
+    const text = await promptFor({ route: '/files', publicBaseUrl: 'http://10.37.245.206:3081' })
+    expect(text).toContain('http://10.37.245.206:3081/files')
+    expect(text).not.toContain('127.0.0.1:3080')
+  })
+
+  it('still uses the bind when nothing is configured', async () => {
+    expect(await promptFor({ route: '/files' })).toContain('http://127.0.0.1:3080/files')
   })
 })

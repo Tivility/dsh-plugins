@@ -88,6 +88,14 @@ about storage — the token is in the process either way. It is what makes the
 comparison constant-time at all: `timingSafeEqual` throws on length-mismatched
 inputs, so comparing raw tokens would leak the secret's length.
 
+## Profile scope
+
+**This row is safe in any profile.** It activates without `webServer` and gates
+nothing there — which is not a hole: with no web server there is no `/api` to
+reach and no route left open. Where a carrier *is* present the gate installs or
+activation throws, so the failure this service refuses to have — installed,
+reporting success, gating nothing — is still impossible.
+
 ## Configuration
 
 ```yaml

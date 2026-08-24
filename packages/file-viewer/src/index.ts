@@ -31,13 +31,14 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import {
-  absoluteUrl,
   assertReadMethod,
   canonicalizeRoots,
   collectRoots,
   isInlineSafe,
   isTrustedRequest,
   mimeFor,
+  normalizePublicBaseUrl,
+  resolvePublicBaseUrl,
   resolveUnderRoots,
   sendHtml,
   sendStatus,
@@ -53,8 +54,14 @@ export type { MarkdownLinks } from './markdown.js'
 /** Stable Cordis plugin name. */
 export const name = 'file-viewer'
 
-/** The HTTP carrier this plugin mounts its route on. */
-export const inject = ['webServer']
+/**
+ * Nothing hard. The route needs `webServer`, but requiring it here would make
+ * this row a startup failure in every profile that serves no HTTP — and a
+ * plugin suite installed once in the home overlay is exactly how that happens.
+ * The route mounts through a nested injection instead, so a headless profile
+ * activates the row, serves nothing, and still gets the prompt section.
+ */
+export const inject: string[] = []
 
 /** Plugin configuration. */
 export interface Config {
@@ -73,6 +80,13 @@ export interface Config {
   fence?: boolean
   /** Non-loopback authorities this deployment serves, as `host` or `host:port`. */
   trustedHosts?: string[]
+  /**
+   * The origin browsers actually reach this deployment at, when that is not
+   * the local bind — behind a reverse proxy, tunnel, or port forwarder. Also
+   * what lets a headless profile emit links to a Web profile serving the same
+   * files. Origin only: scheme, host, optional port.
+   */
+  publicBaseUrl?: string
   /** Register the system prompt section that teaches the model the link format. */
   prompt?: boolean
   /** Render Markdown documents; false shows their source instead. */
@@ -87,6 +101,7 @@ export const Config: z<Config> = z.object({
   workspaces: z.boolean().default(true),
   fence: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  publicBaseUrl: z.string().default(''),
   prompt: z.boolean().default(true),
   markdown: z.boolean().default(true),
   maxTextBytes: z.natural().default(2 * 1024 * 1024),
@@ -99,6 +114,7 @@ interface Resolved {
   readonly workspaces: boolean
   readonly fence: boolean
   readonly trustedHosts: readonly string[]
+  readonly publicBaseUrl: string
   readonly prompt: boolean
   readonly markdown: boolean
   readonly maxTextBytes: number
@@ -127,6 +143,7 @@ function resolveConfig(config: Config): Resolved {
     workspaces: config.workspaces ?? true,
     fence: config.fence ?? true,
     trustedHosts: config.trustedHosts ?? [],
+    publicBaseUrl: config.publicBaseUrl ?? '',
     prompt: config.prompt ?? true,
     markdown: config.markdown ?? true,
     maxTextBytes: config.maxTextBytes ?? 2 * 1024 * 1024,
@@ -327,12 +344,19 @@ function createHandler(
 
 /**
  * The system prompt section teaching the model this route's URL format.
- * @param ctx - a context carrying the `webServer` service.
+ *
+ * Empty when no origin can be resolved. A headless profile with no configured
+ * public origin has nowhere to point: the files may well be served by a Web
+ * profile elsewhere, but only the operator knows where, and a guessed loopback
+ * link points at a server that is not running.
+ * @param ctx - a context that may carry the `webServer` service.
  * @param config - resolved configuration.
- * @returns the prompt text.
+ * @returns the prompt text, or an empty string when there is no origin to name.
  */
-function promptSection(ctx: Context, config: Resolved): string {
-  const base = absoluteUrl(ctx, config.route)
+export function promptSection(ctx: Context, config: Resolved): string {
+  const origin = resolvePublicBaseUrl(ctx, config.publicBaseUrl)
+  if (origin === undefined) return ''
+  const base = `${origin}${config.route}`
   const example = `${base}${toRequestPath(join('/path', 'to', 'report.md'))}`
   return [
     `Files inside the user's workspaces are readable in a browser at ${base}.`,
@@ -353,17 +377,24 @@ function promptSection(ctx: Context, config: Resolved): string {
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const resolved = resolveConfig(config)
+  // Validate a configured origin at activation, not at the first prompt
+  // assembly: a typo should stop the load, not quietly emit broken links.
+  if (resolved.publicBaseUrl !== '') normalizePublicBaseUrl(resolved.publicBaseUrl)
 
-  ctx.effect(async () => {
-    // Configured roots are canonicalized before the route exists, so no
-    // request can be answered against a half-built root set.
-    const staticRoots = await canonicalizeRoots(resolved.roots)
-    return ctx.webServer.register({
-      kind: 'prefix',
-      path: resolved.route,
-      handler: createHandler(ctx, resolved, staticRoots),
-    })
-  }, `file-viewer: ${resolved.route} route`)
+  // Nested, so a profile with no HTTP server activates this row and simply
+  // serves nothing. The route appears if and when a webServer does.
+  ctx.inject(['webServer'], (web) => {
+    web.effect(async () => {
+      // Configured roots are canonicalized before the route exists, so no
+      // request can be answered against a half-built root set.
+      const staticRoots = await canonicalizeRoots(resolved.roots)
+      return web.webServer.register({
+        kind: 'prefix',
+        path: resolved.route,
+        handler: createHandler(web, resolved, staticRoots),
+      })
+    }, `file-viewer: ${resolved.route} route`)
+  })
 
   if (!resolved.prompt) return
   ctx.inject(['systemPrompt'], (scope) => {

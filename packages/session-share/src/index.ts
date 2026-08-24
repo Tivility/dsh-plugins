@@ -28,7 +28,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 // Type-only: contributes the `agent` field on the prompt assembly context.
 import type {} from '@deepseek-ai/dsh-agent'
-import { absoluteUrl, isTrustedRequest, sendStatus } from '@tivility/dsh-web-kit'
+import { isTrustedRequest, normalizePublicBaseUrl, resolvePublicBaseUrl, sendStatus } from '@tivility/dsh-web-kit'
 import { SESSION_PARAM, shareQuery } from './param.js'
 
 export { SESSION_PARAM, shareQuery } from './param.js'
@@ -36,8 +36,14 @@ export { SESSION_PARAM, shareQuery } from './param.js'
 /** Stable Cordis plugin name. */
 export const name = 'session-share'
 
-/** The HTTP carrier this plugin mounts its redirect on. */
-export const inject = ['webServer']
+/**
+ * Nothing hard. The redirect needs `webServer`, but requiring it here would
+ * make this row a startup failure in every profile that serves no HTTP — and a
+ * plugin suite installed once in the home overlay is exactly how that happens.
+ * The route mounts through a nested injection instead, so a headless profile
+ * activates the row and still teaches its agents the link format.
+ */
+export const inject: string[] = []
 
 /** Plugin configuration. */
 export interface Config {
@@ -50,12 +56,20 @@ export interface Config {
   prompt?: boolean
   /** Non-loopback authorities this deployment serves, as `host` or `host:port`. */
   trustedHosts?: string[]
+  /**
+   * The origin browsers actually reach this deployment at, when that is not
+   * the local bind — behind a reverse proxy, tunnel, or port forwarder. Also
+   * what lets a headless profile link into a Web profile serving the same
+   * sessions. Origin only: scheme, host, optional port.
+   */
+  publicBaseUrl?: string
 }
 
 export const Config: z<Config> = z.object({
   route: z.string().default('/s'),
   prompt: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  publicBaseUrl: z.string().default(''),
 })
 
 /** A session id as it may appear in a URL: the harness mints uuids. */
@@ -113,12 +127,16 @@ function createHandler(
  * @param sessionId - the session the calling agent belongs to.
  * @returns the prompt text.
  */
-function promptSection(ctx: Context, route: string, sessionId: string): string {
-  const base = absoluteUrl(ctx, '/')
-  const link = `${base}${shareQuery(sessionId)}`
+function promptSection(ctx: Context, route: string, sessionId: string, publicBaseUrl: string): string {
+  const origin = resolvePublicBaseUrl(ctx, publicBaseUrl)
+  // A headless profile with no configured origin has nowhere to point: the
+  // sessions may well be served by a Web profile elsewhere, but only the
+  // operator knows where, and a guessed loopback link points at nothing.
+  if (origin === undefined) return ''
+  const link = `${origin}/${shareQuery(sessionId)}`
   const shortForm = route === ''
     ? ''
-    : ` The shorter ${absoluteUrl(ctx, route)}/${sessionId} redirects to the same place.`
+    : ` The shorter ${origin}${route}/${sessionId} redirects to the same place.`
   return [
     `This conversation has a direct link: ${link}`,
     `Opening it in a browser selects this session instead of whatever was last open.${shortForm}`,
@@ -138,15 +156,24 @@ function promptSection(ctx: Context, route: string, sessionId: string): string {
 export function apply(ctx: Context, config: Config = {}): void {
   const route = config.route ?? '/s'
   const trustedHosts = config.trustedHosts ?? []
+  const publicBaseUrl = config.publicBaseUrl ?? ''
+  // Validate a configured origin at activation: a typo should stop the load,
+  // not quietly put broken links in front of the model.
+  if (publicBaseUrl !== '') normalizePublicBaseUrl(publicBaseUrl)
+
   if (route !== '') {
     if (!route.startsWith('/') || route.endsWith('/')) {
       throw new Error(`session-share: route ${JSON.stringify(route)} must be an absolute path without a trailing slash`)
     }
-    ctx.effect(() => ctx.webServer.register({
-      kind: 'prefix',
-      path: route,
-      handler: createHandler(route, trustedHosts),
-    }), `session-share: ${route} route`)
+    // Nested, so a profile with no HTTP server activates this row and simply
+    // serves no redirect.
+    ctx.inject(['webServer'], (web) => {
+      web.effect(() => web.webServer.register({
+        kind: 'prefix',
+        path: route,
+        handler: createHandler(route, trustedHosts),
+      }), `session-share: ${route} route`)
+    })
   }
 
   if (config.prompt === false) return
@@ -158,7 +185,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         // Resolved per assembly: the port is known only after the server binds,
         // and the session id is whichever agent this prompt is being built for.
         const sessionId = context.agent?.session.id
-        return sessionId === undefined ? '' : promptSection(scope, route, String(sessionId))
+        return sessionId === undefined ? '' : promptSection(scope, route, String(sessionId), publicBaseUrl)
       },
     })
   })

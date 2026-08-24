@@ -234,8 +234,21 @@ function lockedPage(route: string): string {
  * its service class.
  */
 export class OwnerAuthService extends Service implements OwnerAuth {
-  /** The HTTP carrier whose `/api` routes this service gates. */
-  static inject = ['webServer']
+  /**
+   * Nothing hard.
+   *
+   * Requiring `webServer` here makes this row a startup failure in every
+   * profile that serves no HTTP — and a plugin suite installed once in the
+   * home overlay is exactly how that happens. The gate mounts through a nested
+   * injection instead.
+   *
+   * That is safe to soften only because the softening cannot produce a
+   * deployment that *looks* locked and is not. Without a web server there is
+   * no `/api` to reach and no route to leave open; with one, the gate installs
+   * or throws. The failure mode this service refuses to have — installed,
+   * reporting success, gating nothing — is still impossible.
+   */
+  static inject: string[] = []
 
   static Config: z<Config> = Config
 
@@ -285,21 +298,25 @@ export class OwnerAuthService extends Service implements OwnerAuth {
       secure: config.secure ?? false,
     }
 
-    ctx.effect(() => installGate(ctx.webServer, {
-      covers: path => path === this.apiPath || path.startsWith(`${this.apiPath}/`),
-      intercept: (req, res) => this.gate(req, res),
-      // Upgrades are gated only in a fully locked deployment. With guests
-      // allowed the downlink is exactly what they are meant to see, and it
-      // carries no upstream: the harness closes the socket on the first
-      // client message.
-      ...this.allowGuests ? {} : { allowUpgrade: (req: IncomingMessage) => this.isOwner(req) },
-    }), 'readonly-auth: /api gate')
+    // Both the gate and the unlock page belong to the HTTP surface: where
+    // there is none, there is nothing to gate and nothing to unlock.
+    ctx.inject(['webServer'], (web) => {
+      web.effect(() => installGate(web.webServer, {
+        covers: path => path === this.apiPath || path.startsWith(`${this.apiPath}/`),
+        intercept: (req, res) => this.gate(req, res),
+        // Upgrades are gated only in a fully locked deployment. With guests
+        // allowed the downlink is exactly what they are meant to see, and it
+        // carries no upstream: the harness closes the socket on the first
+        // client message.
+        ...this.allowGuests ? {} : { allowUpgrade: (req: IncomingMessage) => this.isOwner(req) },
+      }), 'readonly-auth: /api gate')
 
-    ctx.effect(() => ctx.webServer.register({
-      kind: 'exact',
-      path: this.route,
-      handler: (req, res) => this.unlock(req, res),
-    }), `readonly-auth: ${this.route} route`)
+      web.effect(() => web.webServer.register({
+        kind: 'exact',
+        path: this.route,
+        handler: (req, res) => this.unlock(req, res),
+      }), `readonly-auth: ${this.route} route`)
+    })
   }
 
   /** Where a visitor goes to unlock. */
