@@ -149,39 +149,49 @@ harness and carries none of its contracts.
 
 `presets/standard-subagent-model/` ships inside the tarball, so the preset and
 the tool it composes move together — a version of one is never paired with a
-version of the other it was not written against.
+version of the other it was not written against, and the package is the one
+place the preset is versioned at all.
 
-Presets are discovered by **path**, not by package, so point a root at the
-directory this package installs into:
+### Installing it
 
-```yaml
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
-  config:
-    roots:
-      - path: ~/.dsh/profiles/<profile>/node_modules/@tivility/dsh-tool-subagent-model/presets
+Copy it into the harness's user preset root:
+
+```sh
+cp -R "$(dirname "$(node -e "process.stdout.write(require.resolve('@tivility/dsh-tool-subagent-model/package.json'))")")/presets/standard-subagent-model" \
+  "${DSH_HOME:-$HOME/.dsh}/.agent-presets/"
 ```
 
-`~` is expanded. From then on `pnpm update` carries every preset change — a
-renamed label, a corrected description, a reworked composition — the same way
-it carries a code change, and nothing has to be copied by hand.
+Re-run it after `pnpm update` to take a new version of the preset. The copy is
+still a copy — what the package changes is that there is now something to copy
+*from* that carries a version, instead of a git checkout somebody has to
+remember to pull.
 
-Three details worth knowing before you rely on it:
+### Why copying, and not a configured root
 
-**The root is `presets/`, never the package directory.** A root's subdirectories
-*are* its presets, and `lib` and `src` are valid preset ids — pointed at the
-package root, the picker would grow two entries reported as broken for missing
-a composition file.
+`agent-presets` takes a `roots` list, and pointing one at this package's
+`presets/` directory looks like the obvious answer. **It does not work under
+the `dsh` CLI.** The launcher composes the roster itself:
 
-**A missing root is silent.** `scanRoot` treats `ENOENT` as an empty root, not
-an error, so a path typo or an uninstalled package produces no diagnostic
-anywhere: the preset simply never appears. Check the picker, not the log.
+```ts
+config: {
+  ...(rows.get('agent-presets')?.config ?? {}),
+  roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
+}
+```
 
-**Copying still works, and stays behind.** `cp -R` into `$DSH_HOME/.agent-presets/`
-is still a preset, and the user root is scanned last — so a copy under the same
-id is shadowed by this one rather than overriding it. A hand-copied preset that
-predates this package will not receive updates, and will look identical while
-not receiving them; delete it once the root is configured.
+`roots` is assigned *after* the user's config is spread in, and that overlay is
+applied after every user layer — so a root configured in a profile patch, the
+home patch, or a `--patch` file is discarded in all three cases. Only the
+shipped root and `$DSH_HOME/.agent-presets` survive.
+
+**A symlink does not work either.** `scanRoot` calls
+`readdir(dir, { withFileTypes: true })` and skips anything that is not
+`isDirectory()`, which a symlink is not — a symlinked preset is silently absent
+rather than followed.
+
+Neither failure reports anything. A configured root that is thrown away and a
+symlink that is skipped both look exactly like a preset that simply is not
+there, so check the picker rather than the log.
 
 ## Configuration
 
