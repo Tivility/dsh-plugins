@@ -1,4 +1,4 @@
-# 标准模式 + 子代理选模型
+# 混动模式
 
 An agent preset: the shipped `standard` composition with one change — the
 delegation tools let each call pick the model, the provider, and the reasoning
