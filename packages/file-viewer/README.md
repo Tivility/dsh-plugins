@@ -129,6 +129,22 @@ Forwarded headers are deliberately never consulted: `Host` and `X-Forwarded-*`
 are attacker-controlled on any request that reaches the server, so trusting
 them would let a visitor choose the origin the model puts in front of a user.
 
+**`publicBaseUrl` says where links point; `trustedHosts` says who is let in.**
+They are two halves of one deployment, and configuring either alone fails in a
+way that reads as a bug in this package. A browser that reached a forwarded
+origin sends `Host: dsh.example.com`, and the browser-trust fence refuses an
+authority it was never told about — so `publicBaseUrl` on its own produces
+links that look correct and answer `403`. Behind a proxy, set both:
+
+```yaml
+    publicBaseUrl: https://dsh.example.com
+    trustedHosts: ['dsh.example.com']
+```
+
+That the fence still refuses an undeclared authority is the point, not a
+leftover: `publicBaseUrl` changes what a link says, and is deliberately unable
+to widen what the server answers.
+
 With no `webServer` **and** no `publicBaseUrl`, the prompt section renders
 nothing rather than naming a loopback address — in a headless profile that
 would point at a server which is not running. Configure the origin of the Web
