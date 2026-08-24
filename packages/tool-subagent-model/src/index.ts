@@ -30,7 +30,9 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SubagentProvider, SubagentResult, SubagentRun } from '@deepseek-ai/dsh-subagent'
 import type { ToolCallView, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { EFFORT_OPTION, installEffortBridge } from './effort.js'
+import { describeOutcome, installBundledPreset } from './preset-install.js'
 
 export { EFFORT_OPTION, installEffortBridge } from './effort.js'
 
@@ -67,6 +69,12 @@ export interface Config {
    * the model to choose on its own.
    */
   routingGuide?: string
+  /**
+   * Install this package's bundled preset into `$DSH_HOME/.agent-presets` on
+   * activation, and refresh it when a new release changes it. Set false for a
+   * deployment that manages its preset roster itself.
+   */
+  installPreset?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -88,6 +96,7 @@ export const Config: z<Config> = z.object({
   }).default(undefined as unknown as { allow: string[], deny: string[] }),
   maxDepth: z.union([z.natural().max(Number.MAX_SAFE_INTEGER), z.const('provider-managed' as const)]).default(3),
   routingGuide: z.string().default(''),
+  installPreset: z.boolean().default(true),
 })
 
 /** The model's arguments, after validation. */
@@ -489,6 +498,19 @@ export function apply(ctx: Context, config: Config): void {
   // One registration covers every descendant: a subagent joins its parent's
   // preset mount, so a listener here sees the whole delegation tree.
   ctx.effect(() => installEffortBridge(ctx), 'tool-subagent-model: effort bridge')
+
+  // The preset this package carries is only discoverable once it is a real
+  // directory under $DSH_HOME — see preset-install.ts for why neither a
+  // configured root nor a symlink gets there. Fire-and-forget: the install
+  // reports its own failures and never rejects, and the delegation tool does
+  // not depend on it in either direction.
+  if (config.installPreset !== false) {
+    void (async () => {
+      const home = resolveDshHome()
+      const said = describeOutcome(await installBundledPreset(home), home)
+      if (said !== undefined) ctx.logger[said.level](said.message)
+    })()
+  }
 
   let disposeTool: (() => void) | undefined
 
