@@ -40,12 +40,23 @@ function comparablePath(path: string, caseSensitive: boolean): string {
 
 /**
  * Purely textual containment, the fast path for canonical spellings.
+ *
+ * Exported for callers that must answer synchronously and can accept a
+ * conservative answer — prompt assembly, where the result decides what an
+ * example URL looks like rather than what may be read. It resolves no
+ * symlinks, so a link into the roots spelled from outside them reads as
+ * outside. Never use it to authorize a read: {@link isPathUnder} is the check
+ * that follows symlinks, and it is the one a request must pass.
  * @param path - candidate path.
  * @param root - the root it may live under.
- * @param caseSensitive - whether case is significant on this filesystem.
+ * @param caseSensitive - whether case is significant on this filesystem; defaults to the host convention.
  * @returns whether the path is the root or textually beneath it.
  */
-function isLexicallyUnder(path: string, root: string, caseSensitive: boolean): boolean {
+export function isLexicallyUnder(
+  path: string,
+  root: string,
+  caseSensitive = process.platform !== 'win32',
+): boolean {
   const target = comparablePath(path, caseSensitive)
   const base = comparablePath(root, caseSensitive)
   if (target === base) return true

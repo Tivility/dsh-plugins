@@ -18,7 +18,7 @@
 export { isTrustedRequest, isSameOrigin, isLoopbackHostname, assertTrustedAuthority } from './request-trust.js'
 export type { TrustRequest } from './request-trust.js'
 
-export { isPathUnder, canonicalize, resolveUnderRoots } from './containment.js'
+export { isPathUnder, isLexicallyUnder, canonicalize, resolveUnderRoots } from './containment.js'
 
 export { canonicalizeRoots, workspaceRoots, collectRoots } from './roots.js'
 

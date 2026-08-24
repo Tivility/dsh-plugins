@@ -43,6 +43,7 @@ same disclaimer on its own copy. Access control belongs to a lock such as
 | `assertTrustedAuthority(entry)` | Reject a configured host that isn't a bare canonical `host[:port]` |
 | `canonicalize(path)` | `realpath` every existing component, append only what genuinely doesn't exist |
 | `isPathUnder(path, root)` | Lexical fast path, filesystem-identity fallback for alias spellings |
+| `isLexicallyUnder(path, root)` | The textual half alone, for a **synchronous** caller — guidance only, never authorization |
 | `resolveUnderRoots(target, roots)` | The two above, composed into the check a route actually makes |
 | `canonicalizeRoots` / `workspaceRoots` / `collectRoots` | Configured roots resolved once; workspaces read live |
 | `resolvePublicBaseUrl(ctx, configured?)` | The public origin: explicit config, then `DSH_PUBLIC_BASE_URL`, then the local bind; `undefined` when nothing can answer |
@@ -52,6 +53,19 @@ same disclaimer on its own copy. Access control belongs to a lock such as
 | `mimeFor` / `isInlineSafe` / `etagFor` / `isFresh` / `parseRange` | The pieces `serveFile` is built from |
 | `sendStatus` / `sendBody` / `sendHtml` / `sendJson` / `assertReadMethod` | Small senders, with `nosniff` and `no-referrer` on every response |
 | `page` / `escapeHtml` / `encodeSegment` / `formatBytes` | The minimal HTML shell the plugin pages share |
+
+### Why `isLexicallyUnder` is exported at all
+
+Because a system prompt section provider must return a string synchronously,
+and `isPathUnder` resolves symlinks, which is asynchronous. A caller in that
+position can accept a conservative answer when the answer only shapes an
+example — file-viewer uses it to decide whether a session's directory is worth
+naming in its prompt.
+
+It resolves nothing, so a path that reaches the roots through a symlink reads
+as outside them. That failure direction is the safe one for guidance and the
+wrong one for access, which is why the table says never authorization: the
+route re-judges every real request with `resolveUnderRoots`.
 
 ## Notes on two decisions
 

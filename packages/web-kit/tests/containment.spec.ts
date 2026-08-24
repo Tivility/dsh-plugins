@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { canonicalize, isPathUnder, resolveUnderRoots } from '../src/containment.ts'
+import { canonicalize, isLexicallyUnder, isPathUnder, resolveUnderRoots } from '../src/containment.ts'
 
 let base: string
 let root: string
@@ -65,6 +65,30 @@ describe('isPathUnder', () => {
   it('recognizes an alias spelling through filesystem identity', async () => {
     await expect(isPathUnder(root.toUpperCase(), root, true))
       .resolves.toBe(process.platform !== 'linux')
+  })
+})
+
+describe('isLexicallyUnder', () => {
+  it('accepts the root itself and its descendants', () => {
+    expect(isLexicallyUnder(root, root)).toBe(true)
+    expect(isLexicallyUnder(join(root, 'a', 'b.txt'), root)).toBe(true)
+  })
+
+  it('rejects a sibling whose name merely starts with the root', () => {
+    expect(isLexicallyUnder(`${root}-sibling`, root)).toBe(false)
+  })
+
+  it('rejects a path outside the root', () => {
+    expect(isLexicallyUnder(outside, root)).toBe(false)
+  })
+
+  it('does not resolve symlinks, unlike isPathUnder', async () => {
+    // The documented difference, and the reason this must never authorize a
+    // read: a link into the root, spelled from outside it, reads as outside.
+    const link = join(outside, 'link-into-root')
+    await symlink(join(root, 'nested'), link)
+    expect(isLexicallyUnder(link, root)).toBe(false)
+    await expect(isPathUnder(await canonicalize(link), root)).resolves.toBe(true)
   })
 })
 
