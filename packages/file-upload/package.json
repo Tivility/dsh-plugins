@@ -1,6 +1,6 @@
 {
   "name": "@tivility/dsh-file-upload",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Drag-and-drop upload into a DeepSeek Harness workspace, gated by ownerAuth when it is installed.",
   "license": "MIT",
   "type": "module",
