@@ -145,32 +145,23 @@ The one runtime dependency is `@deepseek-ai/schemastery`, the standalone schema
 library used for plugin configuration. It is versioned independently of the
 harness and carries none of its contracts.
 
-## The preset travels in this package
+## The preset installs itself
 
-`presets/standard-subagent-model/` ships inside the tarball, so the preset and
-the tool it composes move together — a version of one is never paired with a
-version of the other it was not written against, and the package is the one
-place the preset is versioned at all.
+`presets/standard-subagent-model/` ships inside the tarball, and on activation
+the plugin writes it into `$DSH_HOME/.agent-presets/`. Install the package and
+the preset is in the picker; `pnpm update` and a restart, and a renamed or
+reworked preset follows. There is nothing to copy and nothing to remember.
 
-### Installing it
+Set `installPreset: false` for a deployment that manages its own roster.
 
-Copy it into the harness's user preset root:
+### Why the plugin writes files instead of pointing at them
 
-```sh
-cp -R "$(dirname "$(node -e "process.stdout.write(require.resolve('@tivility/dsh-tool-subagent-model/package.json'))")")/presets/standard-subagent-model" \
-  "${DSH_HOME:-$HOME/.dsh}/.agent-presets/"
-```
+The harness discovers presets by **path** — the roots its launcher composes,
+plus `$DSH_HOME/.agent-presets` — and a package directory is neither. Two
+things look like they should bridge that, and neither does:
 
-Re-run it after `pnpm update` to take a new version of the preset. The copy is
-still a copy — what the package changes is that there is now something to copy
-*from* that carries a version, instead of a git checkout somebody has to
-remember to pull.
-
-### Why copying, and not a configured root
-
-`agent-presets` takes a `roots` list, and pointing one at this package's
-`presets/` directory looks like the obvious answer. **It does not work under
-the `dsh` CLI.** The launcher composes the roster itself:
+**A configured root is discarded.** `agent-presets` takes a `roots` list, but
+the `dsh` launcher composes the roster itself:
 
 ```ts
 config: {
@@ -179,19 +170,40 @@ config: {
 }
 ```
 
-`roots` is assigned *after* the user's config is spread in, and that overlay is
-applied after every user layer — so a root configured in a profile patch, the
-home patch, or a `--patch` file is discarded in all three cases. Only the
-shipped root and `$DSH_HOME/.agent-presets` survive.
+`roots` is assigned *after* the user's config is spread in, in an overlay
+applied after every user layer — so a root set in a profile patch, the home
+patch, or a `--patch` file never survives, in all three cases.
 
-**A symlink does not work either.** `scanRoot` calls
-`readdir(dir, { withFileTypes: true })` and skips anything that is not
-`isDirectory()`, which a symlink is not — a symlinked preset is silently absent
-rather than followed.
+**A symlink is skipped.** `scanRoot` passes over anything that is not
+`isDirectory()`, and a symlink is not.
 
-Neither failure reports anything. A configured root that is thrown away and a
-symlink that is skipped both look exactly like a preset that simply is not
-there, so check the picker rather than the log.
+Both failures are silent. What is left is real files in the real directory,
+which is what this does.
+
+### What it will not overwrite
+
+The directory belongs to the user, so the install writes a marker recording
+exactly what it wrote, and reads it before touching anything again:
+
+| what it finds | what it does |
+| --- | --- |
+| nothing | installs, and records it |
+| its own copy, unchanged | replaces it when a release changes the preset |
+| its own copy, **edited** | leaves it, and says so |
+| a copy it cannot prove it wrote | installs, keeping the previous contents in a sibling directory |
+
+The last row is the one worth explaining. A directory under this preset's id
+with no marker is almost always a copy made by hand before this package
+installed itself — stale by exactly the amount an install would fix. It is
+still not this package's to delete, and leaving it while writing a warning
+would warn nobody: `dsh web` prints one line for an entire boot. So the
+previous contents move to `standard-subagent-model.superseded-1`, which stays
+readable and stops being the preset in use — `PRESET_ID` admits no dot, so the
+scanner passes over it and the picker never shows it.
+
+An edited copy is different and is left alone: editing this package's own file
+is a deliberate act, and a release is not a reason to undo it. Delete the
+directory to go back to the shipped version.
 
 ## Configuration
 

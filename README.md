@@ -45,11 +45,12 @@ rides inside the package it composes:
 The preset exists only to compose that tool, so shipping them together is what
 keeps their versions from drifting apart, and gives the preset a version at all.
 
-Installing it is still a copy into `$DSH_HOME/.agent-presets/` — a configured
-root pointing into `node_modules` is discarded by the `dsh` launcher, and a
-symlink is skipped by the scanner. See
-[the tool's README](packages/tool-subagent-model#the-preset-travels-in-this-package)
-for the command and for why neither shortcut works.
+The plugin installs it into `$DSH_HOME/.agent-presets/` on activation and
+keeps it current, because that directory is the only place the harness will
+find it: a configured root pointing into `node_modules` is discarded by the
+launcher, and a symlink is skipped by the scanner. See
+[the tool's README](packages/tool-subagent-model#the-preset-installs-itself)
+for what it will and will not overwrite.
 
 ## Install into a profile
 
