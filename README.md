@@ -31,12 +31,22 @@ becomes the lock the other two consult.
 
 ### Presets
 
-`presets/` holds agent presets rather than packages — a preset is a directory
-the harness reads from `$DSH_HOME/.agent-presets`, not something npm installs.
+A preset is a directory the harness discovers by **path** — configured roots,
+plus `$DSH_HOME/.agent-presets`. Nothing about it needs to be a package, and
+copying one into place works.
 
-| Preset | What it does |
-| ------ | ------------ |
-| [`standard-subagent-model`](presets/standard-subagent-model) | The shipped `standard` preset, with its two delegation rows pointed at `@tivility/dsh-tool-subagent-model` |
+Copying gives it no version and no way to update, though, so the preset here
+rides inside the package it composes:
+
+| Preset | Ships in | What it does |
+| ------ | -------- | ------------ |
+| [`standard-subagent-model`](packages/tool-subagent-model/presets/standard-subagent-model) | `@tivility/dsh-tool-subagent-model` | The shipped `standard` preset, with its two delegation rows pointed at that tool |
+
+The preset exists only to compose that tool, so shipping them together is what
+keeps their versions from drifting apart — and it puts preset changes on the
+same `pnpm update` path as code changes. Point a root at the package's
+`presets/` directory; see
+[the tool's README](packages/tool-subagent-model#the-preset-travels-in-this-package).
 
 ## Install into a profile
 

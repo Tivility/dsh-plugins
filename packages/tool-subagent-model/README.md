@@ -3,7 +3,7 @@
 Delegation with per-call **model**, **provider**, and **reasoning effort**. A
 drop-in replacement for `@deepseek-ai/dsh-tool-subagent`.
 
-Paired with the [`standard-subagent-model`](../../presets/standard-subagent-model)
+Paired with the [`standard-subagent-model`](presets/standard-subagent-model)
 preset, which is the shipped `standard` composition with its two delegation rows
 pointed here.
 
@@ -144,6 +144,44 @@ hand-written JSON Schema and the argument validator in `validateArgs`.
 The one runtime dependency is `@deepseek-ai/schemastery`, the standalone schema
 library used for plugin configuration. It is versioned independently of the
 harness and carries none of its contracts.
+
+## The preset travels in this package
+
+`presets/standard-subagent-model/` ships inside the tarball, so the preset and
+the tool it composes move together — a version of one is never paired with a
+version of the other it was not written against.
+
+Presets are discovered by **path**, not by package, so point a root at the
+directory this package installs into:
+
+```yaml
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  config:
+    roots:
+      - path: ~/.dsh/profiles/<profile>/node_modules/@tivility/dsh-tool-subagent-model/presets
+```
+
+`~` is expanded. From then on `pnpm update` carries every preset change — a
+renamed label, a corrected description, a reworked composition — the same way
+it carries a code change, and nothing has to be copied by hand.
+
+Three details worth knowing before you rely on it:
+
+**The root is `presets/`, never the package directory.** A root's subdirectories
+*are* its presets, and `lib` and `src` are valid preset ids — pointed at the
+package root, the picker would grow two entries reported as broken for missing
+a composition file.
+
+**A missing root is silent.** `scanRoot` treats `ENOENT` as an empty root, not
+an error, so a path typo or an uninstalled package produces no diagnostic
+anywhere: the preset simply never appears. Check the picker, not the log.
+
+**Copying still works, and stays behind.** `cp -R` into `$DSH_HOME/.agent-presets/`
+is still a preset, and the user root is scanned last — so a copy under the same
+id is shadowed by this one rather than overriding it. A hand-copied preset that
+predates this package will not receive updates, and will look identical while
+not receiving them; delete it once the root is configured.
 
 ## Configuration
 
