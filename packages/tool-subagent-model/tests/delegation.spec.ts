@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { apply, childOptions, EFFORT_OPTION, installEffortBridge, validateArgs, wordingFor } from '../src/index.ts'
+import {
+  apply, childOptions, EFFORT_OPTION, installEffortBridge, presentDelegationCall,
+  routeLabel, validateArgs, wordingFor,
+} from '../src/index.ts'
 
 /** A registered tool, as the registry receives it. */
 interface Tool {
@@ -319,6 +322,88 @@ describe('execution guards', () => {
     const { tool } = bench()
     await expect(tool.execute({ description: 'd', prompt: 'p' }, { signal: new AbortController().signal }))
       .rejects.toThrow(/requires a calling agent/)
+  })
+})
+
+describe('what a reader can see', () => {
+  const fixture = { description: 'audit the auth flow', prompt: 'p' }
+
+  it('names the route in the always-visible title', () => {
+    const view = presentDelegationCall({ ...fixture, model: 'deep-1', effort: 'high' })
+    // Without a presentCall the harness titles the card with the tool name and
+    // buries the route in the raw arguments — which is a guess, not an answer.
+    expect(view?.card).toBe('generic')
+    expect(view && 'title' in view ? view.title : '').toBe('audit the auth flow — deep-1 · effort high')
+  })
+
+  it('says so when the call inherits rather than choosing', () => {
+    expect(routeLabel({})).toBe('inherited model')
+    const view = presentDelegationCall(fixture)
+    expect(view && 'title' in view ? view.title : '').toContain('inherited model')
+  })
+
+  it('names the provider only when the call did', () => {
+    expect(routeLabel({ model: 'm' })).toBe('m')
+    expect(routeLabel({ model: 'm', provider: 'other' })).toBe('m · via other')
+    expect(routeLabel({ model: 'm', provider: 'other', effort: 'low' })).toBe('m · via other · effort low')
+  })
+
+  it('keeps the prompt out of the detail view', () => {
+    const view = presentDelegationCall({ ...fixture, prompt: 'a very long prompt', model: 'm', run_in_background: false })
+    const input = view && 'rawInput' in view ? view.rawInput : undefined
+    expect(input).toEqual({ model: 'm', run_in_background: false })
+  })
+
+  it('falls back to the generic card rather than throwing on unknown arguments', () => {
+    // Replay hands a presenter whatever was logged, possibly under an older
+    // schema; a throw here would break the transcript, not just the card.
+    for (const bad of [undefined, null, {}, { description: 7 }, 'nope', []]) {
+      expect(() => presentDelegationCall(bad)).not.toThrow()
+      expect(presentDelegationCall(bad)).toBeUndefined()
+    }
+  })
+
+  it('names the route on a started run, whose output is still empty', async () => {
+    const b = bench()
+    const value = await call(b.tool, { description: 'd', prompt: 'p', model: 'deep-1', effort: 'high' })
+    const text = b.tool.output.render(
+      { description: 'd', prompt: 'p', model: 'deep-1', effort: 'high' }, value as never)[0]?.text
+    expect(text).toBe('started subagent child-1 on deep-1 · effort high')
+  })
+
+  it('leaves a foreground answer untouched', async () => {
+    const b = bench()
+    const args = { description: 'd', prompt: 'p', model: 'deep-1', run_in_background: false }
+    const value = await call(b.tool, args)
+    expect(b.tool.output.render(args, value as never)[0]?.text).toBe('done')
+  })
+})
+
+describe('the child label, which names the subagent catalog', () => {
+  it('carries the route the call chose', async () => {
+    const b = bench()
+    await call(b.tool, { description: 'check the fleet', prompt: 'p', model: 'deep-1', effort: 'high' })
+    expect(b.continuables[0]?.request.label).toBe('check the fleet · deep-1 · effort high')
+  })
+
+  it('stays the plain description when the call chose nothing', async () => {
+    // The catalog reads an absent suffix as "inherited"; appending that to
+    // every label would be noise on the common case.
+    const b = bench()
+    await call(b.tool, { description: 'check the fleet', prompt: 'p' })
+    expect(b.continuables[0]?.request.label).toBe('check the fleet')
+  })
+
+  it('names the route on a foreground run too', async () => {
+    const b = bench()
+    await call(b.tool, { description: 'audit', prompt: 'p', model: 'm', run_in_background: false })
+    expect(b.starts[0]?.request.label).toBe('audit · m')
+  })
+
+  it('gives a background job the same label', async () => {
+    const b = bench({ config: { backgroundMode: 'one-shot' } })
+    await call(b.tool, { description: 'batch', prompt: 'p', model: 'cheap-1', run_in_background: true })
+    expect(b.jobs[0]?.label).toBe('batch · cheap-1')
   })
 })
 

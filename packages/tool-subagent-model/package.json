@@ -1,6 +1,6 @@
 {
   "name": "@tivility/dsh-tool-subagent-model",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Delegation tool with per-call model, provider, and reasoning-effort selection, for a main agent that dispatches subtasks across a fleet.",
   "license": "MIT",
   "type": "module",

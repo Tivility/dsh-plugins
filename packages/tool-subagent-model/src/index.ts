@@ -28,7 +28,7 @@ import z from '@deepseek-ai/schemastery'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SubagentProvider, SubagentResult, SubagentRun } from '@deepseek-ai/dsh-subagent'
-import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { ToolCallView, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { EFFORT_OPTION, installEffortBridge } from './effort.js'
 
@@ -418,6 +418,56 @@ export function childOptions(
 }
 
 /**
+ * The route one call selected, as a phrase a person can read at a glance.
+ *
+ * Named because it is the answer to "what did this subagent actually run on",
+ * which the tool's own arguments answer only if you expand a JSON blob. A
+ * delegation that names nothing says so rather than staying silent — inherited
+ * is a real answer, and its absence is what made the others a guess.
+ * @param args - the validated call arguments.
+ * @returns the route phrase.
+ */
+export function routeLabel(args: Pick<DelegationArgs, 'model' | 'provider' | 'effort'>): string {
+  const parts: string[] = [args.model ?? 'inherited model']
+  if (args.provider !== undefined) parts.push(`via ${args.provider}`)
+  if (args.effort !== undefined) parts.push(`effort ${args.effort}`)
+  return parts.join(' · ')
+}
+
+/**
+ * How one pending call presents in a UI.
+ *
+ * Without this the harness falls back to a generic card titled with the tool
+ * name, and the route sits in the raw arguments — behind an expander, beside
+ * the whole prompt. The title is the one part that is always on screen, which
+ * also makes it the part that survives a narrow viewport where the header
+ * chrome does not.
+ *
+ * Must never throw: a UI calls it while replaying arguments logged under an
+ * older schema, so anything unrecognized falls back to the generic card
+ * rather than breaking the transcript.
+ * @param rawArgs - the model's arguments, however malformed.
+ * @returns the card, or undefined to accept the generic presentation.
+ */
+export function presentDelegationCall(rawArgs: unknown): ToolCallView | undefined {
+  if (validateArgs(rawArgs).length > 0) return undefined
+  const args = rawArgs as DelegationArgs
+  return {
+    card: 'generic',
+    title: `${args.description} — ${routeLabel(args)}`,
+    kind: 'other',
+    // The route and the run mode, not the whole argument object: the prompt is
+    // the long part and the reader already has the description.
+    rawInput: {
+      ...args.model === undefined ? {} : { model: args.model },
+      ...args.provider === undefined ? {} : { provider: args.provider },
+      ...args.effort === undefined ? {} : { effort: args.effort },
+      ...args.run_in_background === undefined ? {} : { run_in_background: args.run_in_background },
+    },
+  }
+}
+
+/**
  * Mount the delegation tool, its prompt section, and the effort bridge.
  * @param ctx - plugin context carrying tools, subagents, and systemPrompt.
  * @param config - plugin configuration.
@@ -464,14 +514,20 @@ export function apply(ctx: Context, config: Config): void {
       parameters: parameterSchema(wording.promptDescription, backgroundEnabled, continuable),
       output: {
         schema: OUTPUT_SCHEMA as never,
-        render: (_args, value) => {
+        render: (rawArgs, value) => {
           const shaped = value as unknown as DelegationValue
+          // A started run has produced no output yet, so its line is the only
+          // record of where it went until it settles; the foreground line is
+          // the child's own answer and stays untouched.
+          const route = validateArgs(rawArgs).length > 0
+            ? ''
+            : ` on ${routeLabel(rawArgs as DelegationArgs)}`
           return [{
             type: 'text',
             text: shaped.kind === 'background'
-              ? `started background subagent job ${shaped.jobId}`
+              ? `started background subagent job ${shaped.jobId}${route}`
               : shaped.kind === 'continuable'
-                ? `started subagent ${shaped.subagentId}`
+                ? `started subagent ${shaped.subagentId}${route}`
                 : outputText(shaped.output),
           }]
         },
@@ -479,6 +535,9 @@ export function apply(ctx: Context, config: Config): void {
       // A child never mutates the parent session, and the one parent-owned
       // write (starting a job) is a commutative insertion.
       isConcurrencySafe: () => true,
+      // The completed card keeps this title, so the route stays on screen
+      // after the run settles as well.
+      presentCall: presentDelegationCall,
 
       async execute(rawArgs, exec) {
         const violations = validateArgs(rawArgs)
@@ -492,8 +551,17 @@ export function apply(ctx: Context, config: Config): void {
         }
 
         const agentOptions = childOptions(config.agentOptions, args)
+        // The child's persisted display label, which is what the subagent
+        // catalog and the child session are named by — the place a person
+        // actually goes to look at subagents, and until now the place the
+        // route was missing. A call that named nothing keeps the plain
+        // description: absence of a suffix reads as "inherited", and
+        // appending that to every label would be noise.
+        const chose = args.model !== undefined || args.provider !== undefined || args.effort !== undefined
+        const label = chose ? `${args.description} · ${routeLabel(args)}` : args.description
+
         const request = {
-          label: args.description,
+          label,
           prompt: [{ type: 'text', text: args.prompt }] as ContentBlock[],
           parent,
           ...agentOptions === undefined ? {} : { agentOptions },
@@ -509,7 +577,7 @@ export function apply(ctx: Context, config: Config): void {
           // so this call neither waits for nor collects a result.
           const started = await ctx.subagents.startContinuable({
             provider: providerName,
-            label: args.description,
+            label,
             request,
             signal: exec.signal,
           })
@@ -523,7 +591,7 @@ export function apply(ctx: Context, config: Config): void {
           }
           const id = jobs.start({
             kind: 'subagent',
-            label: args.description,
+            label,
             owner: parent,
             run: () => {
               const controller = new AbortController()

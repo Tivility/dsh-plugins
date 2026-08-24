@@ -58,6 +58,34 @@ options. The practical rule: **when a model lives on a route other than the
 deployment default, name `provider` with it.** Saying so in `routingGuide` is
 the cheapest fix, because that is the text the model reads while choosing.
 
+## Seeing what a subagent ran on
+
+A delegation that names a model is only useful if you can tell, afterwards,
+which one it named. Three surfaces carry it:
+
+- **The subagent catalog** — a child's persisted label becomes
+  `deep audit · claude-fable-5 · effort low`. This is the place a person goes
+  to look at subagents, and it is where the route was missing.
+- **The started-run line** — `started subagent <id> on claude-fable-5 · effort low`,
+  which is the only record of where a background run went until it settles.
+- **`presentCall`** — a generic tool-call card titled with the route, for
+  clients that render tool-owned call views.
+
+A call that names nothing keeps its plain description: absence of a suffix
+reads as *inherited*, and appending that to every label would be noise on the
+common case.
+
+### What the Web GUI does not show
+
+The shipped Web client reads a tool-owned call view only for `terminal` and
+`diff` cards; a `generic` one is ignored, and its collapsed tool row is titled
+from the tool name plus the first string in the arguments. Changing that row
+would mean registering a keyed `tool.call.toolview` renderer — which cannot
+reuse the client's own `ToolRow`, so the row would lose the chrome (expand,
+running sweep, state dot) every neighbouring row has. Carrying the route in the
+label and the result line reaches the same reader without a row that looks
+foreign.
+
 ## `effort` needed its own seam
 
 `AgentOptions` is `provider`, `model`, `maxTokens` — there is no effort field,
