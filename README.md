@@ -43,10 +43,13 @@ rides inside the package it composes:
 | [`standard-subagent-model`](packages/tool-subagent-model/presets/standard-subagent-model) | `@tivility/dsh-tool-subagent-model` | The shipped `standard` preset, with its two delegation rows pointed at that tool |
 
 The preset exists only to compose that tool, so shipping them together is what
-keeps their versions from drifting apart — and it puts preset changes on the
-same `pnpm update` path as code changes. Point a root at the package's
-`presets/` directory; see
-[the tool's README](packages/tool-subagent-model#the-preset-travels-in-this-package).
+keeps their versions from drifting apart, and gives the preset a version at all.
+
+Installing it is still a copy into `$DSH_HOME/.agent-presets/` — a configured
+root pointing into `node_modules` is discarded by the `dsh` launcher, and a
+symlink is skipped by the scanner. See
+[the tool's README](packages/tool-subagent-model#the-preset-travels-in-this-package)
+for the command and for why neither shortcut works.
 
 ## Install into a profile
 
