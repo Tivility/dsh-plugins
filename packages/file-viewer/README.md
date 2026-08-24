@@ -18,6 +18,25 @@ bare paths:
 > …I wrote the summary to `/srv/work/report.md`
 > (http://127.0.0.1:3080/files/srv/work/report.md).
 
+### The example is this session's own directory
+
+The prompt's worked example is built from the session's working directory
+whenever that directory is one the route would serve — so a session in
+`/srv/work` is taught `…/files/srv/work/report.md`, not a placeholder.
+
+That is not cosmetic. A generic `/path/to/report.md` has to be combined with a
+prefix before it is worth anything, and in a long or resumed session it
+competes with concrete links already sitting in the history — including ones
+minted before the deployment had a public origin, which is exactly when they
+name an address nobody else can reach. A concrete example rooted where the
+session actually works is directly reusable, which is what makes it win.
+
+A session whose directory sits outside every root falls back to the
+placeholder: a concrete example under an unreadable directory would teach a
+link that answers 403. Containment is judged textually here, because a prompt
+section must answer synchronously; the route still re-judges every real
+request through `realpath`, so nothing about what may be read depends on it.
+
 ## What it serves
 
 `/files` — the roots. `/files` + a file's absolute path — that file.

@@ -17,7 +17,7 @@ type Handler = (req: IncomingMessage, res: ServerResponse) => void | Promise<voi
 async function mount(
   config: Config,
   workspaces: readonly string[],
-  options: { webServer?: boolean } = {},
+  options: MountOptions = {},
 ): Promise<Handler> {
   const handler = await mountMaybe(config, workspaces, options)
   if (handler === undefined) throw new Error('the plugin registered no route')
@@ -25,17 +25,29 @@ async function mount(
 }
 
 /** Mount and return the text of the prompt section the plugin registered. */
-async function promptFor(config: Config, options: { webServer?: boolean } = {}): Promise<string> {
+async function promptFor(
+  config: Config,
+  options: MountOptions = {},
+  workspaces: readonly string[] = [],
+): Promise<string> {
   let text = ''
-  await mountMaybe(config, [], options, (render) => { text = render })
+  await mountMaybe(config, workspaces, options, (render) => { text = render })
   return text
+}
+
+/** What the harness varies between mounts. */
+interface MountOptions {
+  /** Whether a `webServer` is present; a headless profile has none. */
+  readonly webServer?: boolean
+  /** The assembling agent's session working directory, when the assembly has an agent. */
+  readonly cwd?: string
 }
 
 /** Mount without requiring a route: a headless composition registers none. */
 async function mountMaybe(
   config: Config,
   workspaces: readonly string[],
-  options: { webServer?: boolean } = {},
+  options: MountOptions = {},
   onPrompt?: (text: string) => void,
 ): Promise<Handler | undefined> {
   const settled: Promise<unknown>[] = []
@@ -51,7 +63,12 @@ async function mountMaybe(
   const webServer = options.webServer === false ? undefined : server
   const systemPrompt = {
     section(spec: { text(context: unknown): string }) {
-      onPrompt?.(spec.text({ scope: {} }))
+      // `agent` is absent on a diagnostic assembly, which is why the plugin
+      // treats it as optional rather than assuming a session is present.
+      const agent = options.cwd === undefined
+        ? undefined
+        : { session: { header: { cwd: options.cwd } } }
+      onPrompt?.(spec.text({ scope: {}, agent }))
       return () => {}
     },
   }
@@ -329,6 +346,96 @@ describe('a profile with no HTTP server (issues #1 and #2)', () => {
   it('refuses a malformed public origin at activation', async () => {
     await expect(mountMaybe({ publicBaseUrl: 'not-a-url' }, [workspace], { webServer: false }))
       .rejects.toThrow(/publicBaseUrl/)
+  })
+})
+
+describe('a per-session example rooted at the session cwd (issue #4)', () => {
+  it('names the session working directory instead of a placeholder', async () => {
+    const text = await promptFor({ route: '/files' }, { cwd: workspace }, [workspace])
+    expect(text).toContain(`http://127.0.0.1:3080/files${workspace}/report.md`)
+    expect(text).not.toContain('/path/to/report.md')
+  })
+
+  it('gives two sessions different examples', async () => {
+    const other = join(base, 'second-project')
+    await mkdir(other, { recursive: true })
+    const first = await promptFor({ route: '/files' }, { cwd: workspace }, [workspace, other])
+    const second = await promptFor({ route: '/files' }, { cwd: other }, [workspace, other])
+    expect(first).toContain(`${workspace}/report.md`)
+    expect(second).toContain(`${other}/report.md`)
+    expect(first).not.toBe(second)
+  })
+
+  it('encodes spaces and non-ASCII segments', async () => {
+    const odd = join(base, 'my project', '\u6587\u6863')
+    const text = await promptFor({ route: '/files' }, { cwd: odd }, [base])
+    // The sentence pairs the literal path with its URL, so both spellings
+    // appear: the raw one inside backticks, the encoded one as the link.
+    expect(text).toContain('`' + odd + '/report.md`')
+    // Segment-wise encoding: the separators stay separators.
+    expect(text).toContain('/files' + base + '/my%20project/%E6%96%87%E6%A1%A3/report.md')
+    // No unencoded space survives into the link itself.
+    const link = /is (http\S+)\./.exec(text)?.[1]
+    expect(link).toBeDefined()
+    expect(link).not.toMatch(/[ \u4e00-\u9fff]/)
+  })
+
+  it('falls back to the generic example when the assembly has no agent', async () => {
+    // Diagnostic assemblies carry no agent, so there is no session to root at.
+    const text = await promptFor({ route: '/files' }, {}, [workspace])
+    expect(text).toContain('/path/to/report.md')
+  })
+
+  it('falls back when the session cwd is outside every root', async () => {
+    // A concrete example under an unreadable directory would teach a link
+    // that answers 403 — worse than a placeholder the model has to combine.
+    const text = await promptFor({ route: '/files' }, { cwd: outside }, [workspace])
+    expect(text).toContain('/path/to/report.md')
+    expect(text).not.toContain(outside)
+  })
+
+  it('falls back when the cwd is relative rather than absolute', async () => {
+    const text = await promptFor({ route: '/files' }, { cwd: 'relative/dir' }, [workspace])
+    expect(text).toContain('/path/to/report.md')
+  })
+
+  it('roots the example at a configured root, not only a workspace', async () => {
+    const text = await promptFor(
+      { route: '/files', roots: [base], workspaces: false }, { cwd: workspace }, [])
+    expect(text).toContain(`${workspace}/report.md`)
+  })
+
+  it('ignores a workspace the config told it not to serve', async () => {
+    // `workspaces: false` means the registry is not a root, so a cwd inside
+    // one is not reachable and must not become the example.
+    const text = await promptFor({ route: '/files', workspaces: false }, { cwd: workspace }, [workspace])
+    expect(text).toContain('/path/to/report.md')
+  })
+
+  it('uses the public origin for the concrete example, never the bind', async () => {
+    const text = await promptFor(
+      { route: '/files', publicBaseUrl: 'http://10.37.245.206:3081' }, { cwd: workspace }, [workspace])
+    expect(text).toContain(`http://10.37.245.206:3081/files${workspace}/report.md`)
+    expect(text).not.toContain('127.0.0.1')
+  })
+
+  it('does the same from the environment, with no webServer at all', async () => {
+    process.env.DSH_PUBLIC_BASE_URL = 'https://dsh.example.com'
+    try {
+      const text = await promptFor(
+        { route: '/files' }, { cwd: workspace, webServer: false }, [workspace])
+      expect(text).toContain(`https://dsh.example.com/files${workspace}/report.md`)
+      expect(text).not.toContain('127.0.0.1')
+    } finally {
+      delete process.env.DSH_PUBLIC_BASE_URL
+    }
+  })
+
+  it('tells the model to rebuild links rather than quote old ones', async () => {
+    // The behavioral half of issue #4: a resumed session's history can carry
+    // concrete links minted before the deployment had a public origin.
+    const text = await promptFor({ route: '/files' }, { cwd: workspace }, [workspace])
+    expect(text).toContain('earlier in the history')
   })
 })
 

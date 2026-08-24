@@ -25,16 +25,19 @@
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { basename, dirname, extname, join, resolve as resolvePath } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type {} from '@deepseek-ai/dsh-system-prompt'
+import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
+// Type-only: contributes the `agent` field on the prompt assembly context.
+import type {} from '@deepseek-ai/dsh-agent'
 import {
   assertReadMethod,
   canonicalizeRoots,
   collectRoots,
   isInlineSafe,
+  isLexicallyUnder,
   isTrustedRequest,
   mimeFor,
   normalizePublicBaseUrl,
@@ -343,25 +346,68 @@ function createHandler(
 }
 
 /**
+ * A directory the example link should be rooted at: this assembly's session
+ * working directory, when it is one the route would actually serve.
+ *
+ * Containment is judged lexically, because a section provider must answer
+ * synchronously and `isPathUnder`'s symlink resolution is asynchronous. That
+ * is the right trade here: this decides what an example looks like, never what
+ * may be read, and the route re-judges every real request with full
+ * canonicalization. A lexical miss costs a generic example; it cannot widen
+ * what the viewer serves.
+ * @param ctx - a context that may carry the `workspaceRegistry` service.
+ * @param config - resolved configuration.
+ * @param context - the assembly this prompt is being built for, when any.
+ * @returns the session's working directory, or undefined when there is none to use.
+ */
+function exampleDirectory(
+  ctx: Context, config: Resolved, context?: AssembleContext,
+): string | undefined {
+  // Creation-time metadata, deep-frozen by the session store — the directory
+  // the session belongs to, not a cursor that follows the agent around.
+  const cwd = context?.agent?.session.header.cwd
+  if (cwd === undefined || !isAbsolute(cwd)) return undefined
+  // Mirrors the route's own root set: configured roots always, the live
+  // registry only when this deployment serves workspaces at all.
+  const roots = config.workspaces ? collectRoots(ctx, config.roots) : [...config.roots]
+  return roots.some(root => isLexicallyUnder(cwd, root)) ? cwd : undefined
+}
+
+/**
  * The system prompt section teaching the model this route's URL format.
  *
  * Empty when no origin can be resolved. A headless profile with no configured
  * public origin has nowhere to point: the files may well be served by a Web
  * profile elsewhere, but only the operator knows where, and a guessed loopback
  * link points at a server that is not running.
+ *
+ * The example is built from this session's own working directory whenever
+ * there is one inside the roots. A generic `/path/to/report.md` has to be
+ * combined with a prefix before it is useful, and it competes with whatever
+ * concrete links a long session already carries in its history — including
+ * ones minted before the deployment had a public origin. A concrete example
+ * rooted where the session actually works is directly reusable, which is what
+ * makes it win against a stale one.
  * @param ctx - a context that may carry the `webServer` service.
  * @param config - resolved configuration.
+ * @param context - the assembly this prompt is being built for, when any.
  * @returns the prompt text, or an empty string when there is no origin to name.
  */
-export function promptSection(ctx: Context, config: Resolved): string {
+export function promptSection(
+  ctx: Context, config: Resolved, context?: AssembleContext,
+): string {
   const origin = resolvePublicBaseUrl(ctx, config.publicBaseUrl)
   if (origin === undefined) return ''
   const base = `${origin}${config.route}`
-  const example = `${base}${toRequestPath(join('/path', 'to', 'report.md'))}`
+  const directory = exampleDirectory(ctx, config, context)
+  const samplePath = join(directory ?? join('/path', 'to'), 'report.md')
+  const example = `${base}${toRequestPath(samplePath)}`
   return [
     `Files inside the user's workspaces are readable in a browser at ${base}.`,
     'A file\'s URL is that prefix followed by its absolute path, percent-encoded one segment at a time —',
-    `for example \`/path/to/report.md\` is ${example}.`,
+    `for example \`${samplePath}\` is ${example}.`,
+    'Build every link from this prefix, including for a file whose path you learned earlier in the',
+    'conversation: a link quoted from earlier in the history may name an origin this deployment no longer uses.',
     'Append `?raw=1` for the original bytes, or `?download=1` to download the file.',
     'Directories are browsable at the same kind of URL.',
     'When you refer to a file you have written or read, give this link alongside the path,',
@@ -403,7 +449,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       order: 90,
       // Resolved per assembly, not at registration: the port is only known
       // once the server has bound, which may be after this row is added.
-      text: () => promptSection(scope, resolved),
+      text: context => promptSection(scope, resolved, context),
     })
   })
 }
