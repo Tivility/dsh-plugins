@@ -78,6 +78,26 @@ wherever `link` actually points.
 inline from a workspace it would run in this origin, so it is sent as an
 attachment like any other opaque file.
 
+## Versioning
+
+**`1.x` is additive.** New helpers appear in minor releases; a signature or a
+behaviour that plugins already depend on does not change inside a major. A
+break gets `2.0.0`, and the plugins that need it say so.
+
+That promise is what makes the range worth stating. Every plugin here depends
+on `^1.0.0`, so one installed copy serves all of them and a new release reaches
+each without republishing any. Under `0.x` that was impossible: `^0.2.0` stops
+before `0.3.0`, because a `0.x` minor is a breaking boundary by convention — so
+each release of this package stranded its consumers on a private copy of the
+previous one. Two copies of a pure-function library cost nothing but disk, and
+the version everyone reads is still the version everyone gets, which is why
+this is a packaging fix and not a correctness one.
+
+The security-shaped helpers are the reason the promise is narrow rather than
+generous: `isTrustedRequest`, `resolveUnderRoots`, and `isPathUnder` decide what
+a route will answer, and a plugin that pinned a stricter version must never be
+loosened by an upgrade it did not ask for.
+
 ## License
 
 MIT
