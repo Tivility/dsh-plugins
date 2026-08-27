@@ -54,8 +54,36 @@ interface WebServerLike {
   registerUpgrade(route: UpgradeRoute): () => void
 }
 
-/** Marks a handler this module has already wrapped, so a second install does not nest. */
-const WRAPPED = Symbol.for('@tivility/dsh-readonly-auth/wrapped')
+/**
+ * Attached to every handler this module wraps, naming the installation that
+ * wrapped it and the handler underneath.
+ *
+ * A boolean marker was not enough. It could say a handler was wrapped but not
+ * by whom, so a wrapper left behind by a disposed gate both kept answering and
+ * looked "already wrapped" to the next installation — which then declined to
+ * wrap and never installed hooks of its own. A deployment that reloaded its
+ * lock ended up gated by a service that no longer existed, refusing the token
+ * it was reconfigured with.
+ */
+const WRAP_META = Symbol.for('@tivility/dsh-readonly-auth/wrap-meta')
+
+/** What {@link WRAP_META} carries. */
+interface WrapMeta {
+  /** The installation that wrapped this handler; identity, never compared by value. */
+  readonly owner: object
+  /** The handler this wrapper defers to, restored when its owner is disposed. */
+  readonly original: unknown
+}
+
+/**
+ * Read a handler's wrap metadata, when this module wrote it.
+ * @param handler - the handler to inspect.
+ * @returns the metadata, or undefined for a handler this module did not wrap.
+ */
+function wrapMeta(handler: unknown): WrapMeta | undefined {
+  if (typeof handler !== 'function') return undefined
+  return Reflect.get(handler, WRAP_META) as WrapMeta | undefined
+}
 
 /** How one gate decides and refuses. */
 export interface GateHooks {
@@ -106,20 +134,56 @@ function routeTable(server: object, field: string): Map<string, Route> {
   return table as Map<string, Route>
 }
 
+/** One installation's shared state: its identity, and whether it still gates. */
+interface Installation {
+  /** Flipped by the disposer, so a wrapper that outlives its owner is inert. */
+  live: boolean
+}
+
 /**
  * Wrap one handler so the gate runs first.
+ *
+ * Wrapping is idempotent per installation and never skipped because *another*
+ * installation got there first — two live gates should both run, and the
+ * previous behaviour of declining to wrap is what let a disposed gate keep the
+ * route to itself.
  * @param handler - the handler to protect.
  * @param hooks - the gate's decision and refusal.
- * @returns the wrapped handler, marked so it is not wrapped twice.
+ * @param owner - the installation doing the wrapping.
+ * @returns the wrapped handler, carrying what is needed to undo it.
  */
-function guard(handler: Route['handler'], hooks: GateHooks): Route['handler'] {
-  if (Reflect.get(handler, WRAPPED) === true) return handler
+function guard(handler: Route['handler'], hooks: GateHooks, owner: Installation): Route['handler'] {
+  if (wrapMeta(handler)?.owner === owner) return handler
   const wrapped: Route['handler'] = async (req, res) => {
-    if (await hooks.intercept(req, res)) return
+    // A wrapper can outlive its installation — nested inside another owner's
+    // wrapper, or in a table this module cannot reach. Once disposed it steps
+    // aside rather than answering with a service that is gone.
+    if (owner.live && await hooks.intercept(req, res)) return
     await handler(req, res)
   }
-  Object.defineProperty(wrapped, WRAPPED, { value: true })
+  Object.defineProperty(wrapped, WRAP_META, { value: { owner, original: handler } satisfies WrapMeta })
   return wrapped
+}
+
+/**
+ * Put every handler this installation wrapped back, wherever it now sits.
+ *
+ * Scanning the tables at disposal rather than replaying recorded swaps is what
+ * covers the three cases a recorded swap misses: a route registered while the
+ * gate was active, a covered route replaced under it, and an entry moved
+ * between tables. Ownership is checked by identity, so a wrapper belonging to
+ * another live installation is left exactly where it is.
+ * @param tables - every route table this installation may have written to.
+ * @param owner - the installation being disposed.
+ */
+function unwrapOwned(tables: readonly Map<string, { handler: unknown }>[], owner: Installation): void {
+  for (const table of tables) {
+    for (const [path, route] of [...table]) {
+      const meta = wrapMeta(route.handler)
+      if (meta?.owner !== owner) continue
+      table.set(path, { ...route, handler: meta.original })
+    }
+  }
 }
 
 /**
@@ -133,18 +197,16 @@ function guard(handler: Route['handler'], hooks: GateHooks): Route['handler'] {
 export function installGate(service: WebServerLike, hooks: GateHooks): () => void {
   const server = unwrap(service)
   const tables = [routeTable(server, 'exact'), routeTable(server, 'prefixes')]
+  const owner: Installation = { live: true }
   const restore: (() => void)[] = []
+  const owned: Map<string, { handler: unknown }>[] = [...tables]
 
   // Already registered: replace the table entry with a guarded copy. The
   // owner's own disposer deletes by path and is unaffected by the swap.
   for (const table of tables) {
     for (const [path, route] of [...table]) {
       if (!hooks.covers(path)) continue
-      const guarded: Route = { ...route, handler: guard(route.handler, hooks) }
-      table.set(path, guarded)
-      restore.push(() => {
-        if (table.get(path) === guarded) table.set(path, route)
-      })
+      table.set(path, { ...route, handler: guard(route.handler, hooks, owner) })
     }
   }
 
@@ -152,17 +214,15 @@ export function installGate(service: WebServerLike, hooks: GateHooks): () => voi
   // prototype method for this instance only.
   restore.push(patchMethod(server, 'register', original => (...args) => {
     const route = args[0] as Route
-    return original(hooks.covers(route.path) ? { ...route, handler: guard(route.handler, hooks) } : route)
+    return original(hooks.covers(route.path) ? { ...route, handler: guard(route.handler, hooks, owner) } : route)
   }))
 
   const allowUpgrade = hooks.allowUpgrade
   if (allowUpgrade !== undefined) {
     const guardUpgrade = (route: UpgradeRoute): UpgradeRoute => {
       if (!hooks.covers(route.path)) return route
-      return {
-        ...route,
-        handler: (req, socket, head) => {
-          if (!allowUpgrade(req)) {
+      const wrapped: UpgradeRoute['handler'] = (req, socket, head) => {
+          if (owner.live && !allowUpgrade(req)) {
             // No status line is available once a socket is being upgraded and
             // the refusal is not negotiable, so the socket is simply dropped —
             // the same thing the harness does for an untrusted upgrade.
@@ -170,8 +230,11 @@ export function installGate(service: WebServerLike, hooks: GateHooks): () => voi
             return
           }
           return route.handler(req, socket, head)
-        },
       }
+      Object.defineProperty(wrapped, WRAP_META, {
+        value: { owner, original: route.handler } satisfies WrapMeta,
+      })
+      return { ...route, handler: wrapped }
     }
     restore.push(patchMethod(server, 'registerUpgrade', original => (...args) =>
       original(guardUpgrade(args[0] as UpgradeRoute))))
@@ -185,20 +248,19 @@ export function installGate(service: WebServerLike, hooks: GateHooks): () => voi
         + 'Set allowGuests to true, or update this plugin for the harness release in use.',
       )
     }
+    owned.push(upgrades as Map<string, { handler: unknown }>)
     for (const [path, route] of [...upgrades as Map<string, UpgradeRoute>]) {
       if (!hooks.covers(path)) continue
-      const guarded = guardUpgrade(route)
-      ;(upgrades as Map<string, UpgradeRoute>).set(path, guarded)
-      restore.push(() => {
-        if ((upgrades as Map<string, UpgradeRoute>).get(path) === guarded) {
-          (upgrades as Map<string, UpgradeRoute>).set(path, route)
-        }
-      })
+      ;(upgrades as Map<string, UpgradeRoute>).set(path, guardUpgrade(route))
     }
   }
 
   return () => {
+    // Order matters: stop gating first, so a request arriving mid-disposal is
+    // answered by the underlying handler rather than by a half-removed gate.
+    owner.live = false
     for (const undo of restore.reverse()) undo()
+    unwrapOwned(owned, owner)
   }
 }
 

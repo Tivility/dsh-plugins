@@ -119,6 +119,73 @@ describe('gating a route registered after the lock', () => {
   })
 })
 
+describe('disposal must actually ungate (issue #12)', () => {
+  it('restores a route that existed before the gate', async () => {
+    const dispose = ctx.webServer.register({ kind: 'prefix', path: '/early', handler: echo as never })
+    const unmount = await mountLock({ apiPath: '/early' })
+    expect((await post('/early/session.prompt')).status).toBe(403)
+    await unmount()
+    expect((await post('/early/session.prompt')).status).toBe(200)
+    dispose()
+  })
+
+  it('restores a route registered while the gate was active', async () => {
+    // The reported case: the handler is wrapped on the way in, and nothing
+    // records how to put it back — so the closure over the disposed service
+    // keeps answering.
+    const unmount = await mountLock({ apiPath: '/late-restore' })
+    const dispose = ctx.webServer.register({ kind: 'prefix', path: '/late-restore', handler: echo as never })
+    expect((await post('/late-restore/session.prompt')).status).toBe(403)
+    await unmount()
+    expect((await post('/late-restore/session.prompt')).status).toBe(200)
+    dispose()
+  })
+
+  it('restores the latest handler when a covered route is replaced', async () => {
+    const unmount = await mountLock({ apiPath: '/replaced' })
+    const first = ctx.webServer.register({ kind: 'prefix', path: '/replaced', handler: echo as never })
+    first()
+    const second = ctx.webServer.register({ kind: 'prefix', path: '/replaced', handler: echo as never })
+    expect((await post('/replaced/session.prompt')).status).toBe(403)
+    await unmount()
+    expect((await post('/replaced/session.prompt')).status).toBe(200)
+    second()
+  })
+
+  it('leaves nothing gated after two enable/disable cycles', async () => {
+    // Each cycle registers its route while that cycle's gate is active, which
+    // is the shape HMR actually produces: the transport reloads under a live
+    // lock. A wrapper left behind by cycle one gates cycle two's traffic with
+    // a disposed service.
+    for (const cycle of [1, 2]) {
+      const unmount = await mountLock({ apiPath: '/cycles' })
+      const dispose = ctx.webServer.register({ kind: 'prefix', path: '/cycles', handler: echo as never })
+      expect((await post('/cycles/session.prompt')).status, `cycle ${String(cycle)} gated`).toBe(403)
+      await unmount()
+      expect((await post('/cycles/session.prompt')).status, `cycle ${String(cycle)} ungated`).toBe(200)
+      dispose()
+    }
+  })
+
+  it('lets a second lock gate with its own token, not the disposed one', async () => {
+    // The compound failure the report warns about: a surviving wrapper is
+    // marked wrapped, so the next installation declines to wrap and never
+    // installs hooks — the deployment stays locked to a token nobody
+    // configured any more, and the token that is configured is refused.
+    const first = await mountLock({ apiPath: '/second' })
+    const dispose = ctx.webServer.register({ kind: 'prefix', path: '/second', handler: echo as never })
+    await first()
+    const second = await mountLock({ apiPath: '/second', token: 'a-different-token' })
+    try {
+      expect((await post('/second/session.prompt', 'dsh_owner=a-different-token')).status).toBe(200)
+      expect((await post('/second/session.prompt', `dsh_owner=${encodeURIComponent(TOKEN)}`)).status).toBe(403)
+    } finally {
+      await second()
+      dispose()
+    }
+  })
+})
+
 describe('the owner grant', () => {
   let unmount: () => Promise<void>
   beforeAll(async () => { unmount = await mountLock() })
