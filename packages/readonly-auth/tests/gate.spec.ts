@@ -183,6 +183,77 @@ describe('the owner grant', () => {
   }, 20_000)
 })
 
+describe('the form the lock serves must be able to post to it (issue #11)', () => {
+  let unmount: () => Promise<void>
+  beforeAll(async () => { unmount = await mountLock() })
+  afterAll(async () => { await unmount() })
+
+  /** One page this route serves, with its referrer policy. */
+  async function pageAt(path: string, init: RequestInit = {}): Promise<{ policy: string | null, status: number }> {
+    const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, init)
+    await response.text()
+    return { policy: response.headers.get('referrer-policy'), status: response.status }
+  }
+
+  it('serves the unlock form under same-origin, not no-referrer', async () => {
+    // Under `no-referrer`, Fetch serializes a navigation-mode POST's Origin as
+    // the literal `null`, which this route's own fence then refuses.
+    expect(await pageAt('/unlock')).toEqual({ policy: 'same-origin', status: 200 })
+  })
+
+  it('serves the retry form the same way', async () => {
+    expect(await pageAt('/unlock', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'token=wrong',
+    })).toEqual({ policy: 'same-origin', status: 401 })
+  }, 20_000)
+
+  it('serves the lock-again form the same way', async () => {
+    expect(await pageAt('/unlock', { headers: { cookie: `dsh_owner=${encodeURIComponent(TOKEN)}` } }))
+      .toEqual({ policy: 'same-origin', status: 200 })
+  })
+
+  it('accepts the submission a browser makes from that page', async () => {
+    // What Chrome sends for a same-origin HTML form POST under `same-origin`:
+    // the real origin, and `sec-fetch-site: same-origin`.
+    const response = await fetch(`http://127.0.0.1:${String(port)}/unlock`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        origin: `http://127.0.0.1:${String(port)}`,
+        'sec-fetch-site': 'same-origin',
+      },
+      body: `token=${encodeURIComponent(TOKEN)}`,
+      redirect: 'manual',
+    })
+    expect(response.status).toBe(303)
+    expect(response.headers.get('set-cookie') ?? '').toContain('HttpOnly')
+  }, 20_000)
+
+  it('still refuses an opaque origin', async () => {
+    // The fix must not have widened the fence: `null` is what a cross-origin
+    // form, a sandboxed frame, and a redirected POST all present.
+    const response = await fetch(`http://127.0.0.1:${String(port)}/unlock`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'null' },
+      body: `token=${encodeURIComponent(TOKEN)}`,
+      redirect: 'manual',
+    })
+    expect(response.status).toBe(403)
+    expect(response.headers.get('set-cookie')).toBeNull()
+  })
+
+  it('leaves the file-serving default alone elsewhere', async () => {
+    // web-kit's `no-referrer` is right for routes that serve workspace bytes;
+    // this fix is scoped to the pages that carry a form.
+    const response = await fetch(`http://127.0.0.1:${String(port)}/unlock`, { method: 'DELETE' })
+    await response.text()
+    expect(response.status).toBe(405)
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+  })
+})
+
 describe('a fully locked deployment', () => {
   it('refuses even the reads', async () => {
     const unmount = await mountLock({ allowGuests: false })
