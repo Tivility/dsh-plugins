@@ -1,6 +1,6 @@
 {
   "name": "@tivility/dsh-web-kit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Shared HTTP building blocks for out-of-tree DeepSeek Harness web plugins: the browser-trust fence, path containment, root resolution, and a static response pipeline.",
   "license": "MIT",
   "type": "module",

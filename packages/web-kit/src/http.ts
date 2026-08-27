@@ -160,8 +160,35 @@ const BASE_HEADERS: Readonly<Record<string, string>> = {
   // These routes serve workspace bytes chosen by a URL. Sniffing would let a
   // text file be reinterpreted as script; a restrictive policy keeps whatever
   // does render from reaching back into this origin.
+  //
+  // `no-referrer` is wrong for exactly one kind of page — see FORM_PAGE_HEADERS.
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
+}
+
+/**
+ * Headers for a page whose own `<form>` posts back to this server.
+ *
+ * The `no-referrer` default above breaks such a page, and does it silently.
+ * Under Fetch, a navigation-mode request — which is what an ordinary HTML form
+ * submission is — serializes its `Origin` as the literal `null` when the
+ * document's referrer policy is `no-referrer`. A route that then applies
+ * {@link isTrustedRequest} refuses its own form, because refusing an opaque
+ * origin is exactly what that fence should do. Two correct decisions, one
+ * unusable page.
+ *
+ * Only navigation-mode writes are affected. A `fetch()` carries mode `cors`
+ * and its origin is serialized regardless of referrer policy, so a page that
+ * posts with `fetch` needs nothing from here.
+ *
+ * `same-origin` is the narrowest policy that fixes it: the origin is sent to
+ * this server and still withheld cross-origin. Spread it over a form page's
+ * response and leave every other route on the default.
+ * @example
+ * sendHtml(res, unlockPage(), FORM_PAGE_HEADERS)
+ */
+export const FORM_PAGE_HEADERS: Readonly<Record<string, string>> = {
+  'referrer-policy': 'same-origin',
 }
 
 /**

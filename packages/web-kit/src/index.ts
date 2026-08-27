@@ -29,6 +29,7 @@ export {
 export {
   MIME, mimeFor, isInlineSafe, etagFor, isFresh, parseRange,
   sendStatus, sendBody, sendHtml, sendJson, serveFile, assertReadMethod,
+  FORM_PAGE_HEADERS,
 } from './http.js'
 export type { ByteRange, ServeFileOptions } from './http.js'
 

@@ -24,7 +24,9 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { escapeHtml, isTrustedRequest, page, sendBody, sendHtml, sendStatus } from '@tivility/dsh-web-kit'
+import {
+  escapeHtml, FORM_PAGE_HEADERS, isTrustedRequest, page, sendBody, sendHtml, sendStatus,
+} from '@tivility/dsh-web-kit'
 import { installGate } from './gate.js'
 import { judge, readMethodSet, DEFAULT_READ_METHODS } from './policy.js'
 import { clearCookie, digest, matches, readCookie, serializeCookie } from './token.js'
@@ -199,26 +201,6 @@ function submittedToken(body: string, contentType: string | undefined): string |
 }
 
 /** The unlock page, with an optional failure line. */
-/**
- * The referrer policy every page carrying an unlock form is served under.
- *
- * web-kit sends `no-referrer` on everything, which is right for a route that
- * serves workspace bytes and wrong for exactly one page in this deployment.
- * Under Fetch, a navigation-mode POST — an ordinary HTML form submission —
- * serializes its `Origin` as the literal `null` when the document's referrer
- * policy is `no-referrer`. This route then puts that POST through
- * `isTrustedRequest`, which refuses an opaque origin as it should, and the
- * unlock form is rejected before the token is ever read: the lock cannot be
- * opened from the page it serves.
- *
- * `same-origin` is the narrowest policy that fixes it. The origin is
- * serialized for a same-origin submission and still withheld cross-origin, so
- * the fence keeps refusing a `null` origin and keeps seeing a real one from
- * its own form. Scoped to these pages rather than lifted into web-kit's
- * default, because `no-referrer` remains right for the file routes.
- */
-const FORM_HEADERS: Readonly<Record<string, string>> = { 'referrer-policy': 'same-origin' }
-
 function unlockPage(route: string, failed: boolean): string {
   const notice = failed
     ? '<p class="note" style="color:#c0392b">That token was not accepted.</p>'
@@ -446,7 +428,7 @@ export class OwnerAuthService extends Service implements OwnerAuth {
 
     if (req.method === 'GET' || req.method === 'HEAD') {
       // Both pages carry a form, so both need the policy that lets it post.
-      sendHtml(res, this.isOwner(req) ? lockedPage(this.route) : unlockPage(this.route, false), FORM_HEADERS)
+      sendHtml(res, this.isOwner(req) ? lockedPage(this.route) : unlockPage(this.route, false), FORM_PAGE_HEADERS)
       return
     }
     if (req.method !== 'POST') {
@@ -467,7 +449,7 @@ export class OwnerAuthService extends Service implements OwnerAuth {
     const presented = submittedToken(body, req.headers['content-type'])
     const accepted = await this.attempt(presented)
     if (!accepted) {
-      sendBody(res, unlockPage(this.route, true), 'text/html; charset=utf-8', FORM_HEADERS, 401)
+      sendBody(res, unlockPage(this.route, true), 'text/html; charset=utf-8', FORM_PAGE_HEADERS, 401)
       return
     }
     res.writeHead(303, {

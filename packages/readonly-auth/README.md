@@ -48,6 +48,29 @@ on the first client message — `close(1008, 'downlink only')`, with
 over HTTP covers every write. Upgrades are gated only when `allowGuests: false`,
 where the point is that a visitor should not see the stream at all.
 
+## Disposal has to undo the wrapping
+
+Disabling this row must leave the deployment ungated, and that is harder than
+it sounds: the wrappers this plugin installs are not entries it can delete but
+handlers sitting inside a table someone else owns.
+
+Every wrapper therefore carries the installation that made it and the handler
+underneath. Disposal scans the covered tables and restores only handlers
+belonging to that installation — which covers a route registered while the gate
+was active, a covered route replaced under it, and an upgrade route, none of
+which a list of recorded swaps would reach.
+
+A wrapper is also inert once its owner is disposed, so one that cannot be
+removed — nested inside another live installation's wrapper, or in a table this
+plugin does not know about — steps aside instead of answering with a service
+that no longer exists.
+
+The identity matters as much as the unwrapping. A plain "already wrapped" flag
+could say a handler was wrapped but not by whom, so a leftover wrapper both
+kept gating and looked wrapped to the next installation, which then declined to
+wrap and installed no hooks at all. The deployment stayed locked to a token
+nobody had configured any more, and refused the one that was.
+
 ## How the gate gets installed
 
 By patching `webServer`, because there is no seam. All three candidates are
@@ -78,8 +101,8 @@ lock installs, reports success, and gates nothing.
 `SameSite=Strict`, `Path=/`, and `Max-Age`; `Secure` is added when `secure` is
 set. `POST /unlock?lock=1` clears it.
 
-**Every page carrying a form is served under `Referrer-Policy: same-origin`,
-overriding web-kit's `no-referrer`.** Not a preference — under Fetch, a
+**Every page carrying a form is served under web-kit's `FORM_PAGE_HEADERS`
+(`Referrer-Policy: same-origin`), overriding its `no-referrer` default.** Not a preference — under Fetch, a
 navigation-mode POST (an ordinary form submission) serializes its `Origin` as
 the literal `null` when the document's policy is `no-referrer`, and this route
 puts that POST through the same browser-trust fence as everything else, which
