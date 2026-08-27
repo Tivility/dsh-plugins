@@ -78,6 +78,16 @@ lock installs, reports success, and gates nothing.
 `SameSite=Strict`, `Path=/`, and `Max-Age`; `Secure` is added when `secure` is
 set. `POST /unlock?lock=1` clears it.
 
+**Every page carrying a form is served under `Referrer-Policy: same-origin`,
+overriding web-kit's `no-referrer`.** Not a preference — under Fetch, a
+navigation-mode POST (an ordinary form submission) serializes its `Origin` as
+the literal `null` when the document's policy is `no-referrer`, and this route
+puts that POST through the same browser-trust fence as everything else, which
+refuses an opaque origin as it should. The two correct choices cancel out, and
+the lock cannot be opened from the page it serves. `same-origin` is the
+narrowest policy that sends a real origin to this route while still withholding
+one cross-origin; the file routes keep `no-referrer`, where it belongs.
+
 **Wrong attempts queue.** A fixed per-attempt delay does nothing against a
 hundred parallel guesses, so attempts are serialized: each waits for the
 previous, and a failure holds the queue for a backoff that doubles to 30s.

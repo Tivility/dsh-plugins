@@ -1,6 +1,6 @@
 {
   "name": "@tivility/dsh-readonly-auth",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Owner lock for a DeepSeek Harness web deployment: unlocked visitors read, the owner drives. Provides the ownerAuth service.",
   "license": "MIT",
   "type": "module",
