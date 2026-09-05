@@ -54,6 +54,8 @@ interface SessionsFace {
 /** The slot registry, narrowed to the one registration this plugin makes. */
 interface SlotsFace {
   register(spec: { name: string, id?: string, order?: number, locale?: string }, component: unknown): () => void
+  /** Declaration-gated wait (dsh ≥0.1.3): runs the callback once the slot's parent declares it. */
+  inject(name: string, callback: () => () => void): () => void
 }
 
 /** The locale registry, narrowed to the one bundle this plugin adds. */
@@ -134,7 +136,9 @@ export function apply(ctx: ShareContext): void {
   openRequestedSession(ctx)
 
   ctx.effect(() => ctx.locale.register(SHARE_NS, { zh, en }))
-  ctx.effect(() => ctx.slots.register({
+  // Declaration-gated since dsh 0.1.3: registering into a slot before its
+  // parent declares it throws, so the registration waits behind slots.inject.
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     // The header's utility band, not the title row: this is a control, and the
     // band beside the breadcrumb is where static session context belongs.
     name: 'conversation.session.header.utilities',

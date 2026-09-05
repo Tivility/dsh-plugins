@@ -165,6 +165,12 @@ function clientBench(href: string, initial: Snapshot) {
         registrations.push({ spec, component })
         return () => {}
       },
+      // Declaration-gated wait: the bench declares every slot up front, so the
+      // callback runs immediately, mirroring dsh ≥0.1.3 after declaration.
+      inject(_name: string, callback: () => () => void) {
+        const dispose = callback()
+        return () => { dispose() }
+      },
     },
     locale: {
       register(ns: string, dicts: Record<string, unknown>) {
