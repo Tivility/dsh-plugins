@@ -1,184 +1,163 @@
 /**
- * Synthetic Test Suite for @tivility/dsh-tool-subagent-memory
+ * Behaviour of the `global_memory` patch, against a subagent service that
+ * enforces the two harness rules the patch has to live with.
+ *
+ * The fake reproduces `SubagentRuntime.assertCapabilities` — a request carrying
+ * `agentOptions` is refused by a provider without that capability — and
+ * `resolveMaxDepth`, which falls back to the deployment-wide depth when the tool
+ * configures none. A fake that skipped either would pass the very regressions
+ * these tests exist to catch: an earlier version of this fork sent
+ * `agentOptions` on every call and hard-coded a depth of 3, and its suite only
+ * ever built a provider that supported both.
  */
 
-import { describe, it, expect } from 'vitest';
-import { apply as applySubagentMemory } from '../src/index.js';
+import { describe, expect, it } from 'vitest'
+import { apply } from '../src/index.js'
 
 interface Tool {
-  name: string;
-  description: string;
-  parameters: {
-    type?: string;
-    properties?: Record<string, { type: string; description?: string }>;
-    required?: string[];
-  };
-  output: { schema: object; render(args: unknown, value: any): { type: string; text: string }[] };
-  isConcurrencySafe(args: unknown): boolean;
-  execute(args: unknown, exec: unknown): Promise<Record<string, unknown>>;
+  name: string
+  parameters: { properties: Record<string, { type?: string; description?: string }> }
+  execute(args: unknown, exec: unknown): Promise<unknown>
 }
 
-interface StartCall {
-  provider: string;
-  request: Record<string, unknown>;
+interface Capabilities {
+  agentOptions: boolean
+  depthLimit: boolean
 }
 
-interface Bench {
-  tool: Tool;
-  starts: StartCall[];
-  continuables: StartCall[];
-  promptText(): string;
-}
+/** The deployment-wide depth `resolveMaxDepth` falls back to. */
+const DEPLOYMENT_MAX_DEPTH = 1
 
 function createBench(options: {
-  config?: Record<string, unknown>;
-} = {}): Bench {
-  const starts: StartCall[] = [];
-  const continuables: StartCall[] = [];
-  let tool: Tool | undefined;
-  let section: { text(context: unknown): string } | undefined;
+  capabilities?: Partial<Capabilities>
+  config?: Record<string, unknown>
+} = {}) {
+  const requests: Record<string, unknown>[] = []
+  let tool: Tool | undefined
 
   const provider = {
     name: 'spawn',
-    capabilities: { depthLimit: true, agentOptions: true },
+    capabilities: {
+      agentOptions: true,
+      depthLimit: true,
+      outputSchema: false,
+      toolFilter: false,
+      persona: false,
+      ...options.capabilities,
+    },
     inheritsParentContext: false,
-    prepareContinuable: () => {},
-  };
+  }
 
-  const registeredProjections: any[] = [];
+  /** `SubagentRuntime.assertCapabilities`, rule for rule. */
+  const assertCapabilities = (request: Record<string, unknown>): void => {
+    const needs: [boolean, keyof typeof provider.capabilities][] = [
+      [request.agentOptions !== undefined, 'agentOptions'],
+      [request.maxDepth !== undefined, 'depthLimit'],
+    ]
+    for (const [when, cap] of needs) {
+      if (when && !provider.capabilities[cap]) {
+        throw new Error(`subagent provider "${provider.name}" does not support the "${cap}" capability`)
+      }
+    }
+  }
 
   const ctx = {
     tools: {
       register(definition: Tool) {
-        tool = definition;
-        return () => { tool = undefined; };
+        tool = definition
+        return () => { tool = undefined }
       },
       get: () => tool,
     },
     subagents: {
-      getProvider: (nameString: string) => (nameString === 'spawn' ? provider : undefined),
-      start(providerName: string, request: Record<string, unknown>) {
-        starts.push({ provider: providerName, request });
+      getProvider: (name: string) => (name === 'spawn' ? provider : undefined),
+      /** `SubagentRuntime.resolveMaxDepth`. */
+      resolveMaxDepth(configured?: number | 'provider-managed') {
+        if (configured === 'provider-managed') return undefined
+        return configured ?? DEPLOYMENT_MAX_DEPTH
+      },
+      start(_provider: string, request: Record<string, unknown>) {
+        assertCapabilities(request)
+        requests.push(request)
         return Promise.resolve({
-          id: 'run-synth-1',
-          result: Promise.resolve({
-            stopReason: 'completed',
-            output: [{ type: 'text', text: 'synthetic completed output' }],
-          }),
+          id: 'run-1',
+          result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] }),
           dispose: () => {},
-        });
-      },
-      startContinuable(request: { provider: string; request: Record<string, unknown> }) {
-        continuables.push({ provider: request.provider, request: request.request });
-        return Promise.resolve({ childId: 'child-synth-1' });
+        })
       },
     },
-    systemPrompt: {
-      section(spec: { text(context: unknown): string }) {
-        section = spec;
-        return () => {};
-      },
-      getSectionOrder: () => 100,
-    },
-    sessionProjections: {
-      register(proj: any) {
-        registeredProjections.push(proj);
-      },
-      stateOf: () => null,
-    },
-    get: (nameString: string) => {
-      if (nameString === 'jobs') {
-        return {
-          start: () => 'job-synth-1',
-        };
-      }
-      return undefined;
-    },
+    systemPrompt: { section: () => () => {} },
+    sessionProjections: { register: () => {}, stateOf: () => null },
+    get: () => undefined,
     on: () => () => {},
-    effect(run: () => unknown) {
-      run();
-      return () => {};
-    },
+    effect(run: () => unknown) { run(); return () => {} },
+    inject(_names: string[], run: (inner: unknown) => void) { run(ctx); return {} },
     logger: { info: () => {}, warn: () => {} },
-  };
+  }
 
-  applySubagentMemory(ctx as any, { provider: 'spawn', backgroundMode: 'continuable', ...options.config } as any);
-  if (tool === undefined) throw new Error('no tool registered');
-  return {
-    tool,
-    starts,
-    continuables,
-    promptText: () => section?.text({ scope: {} }) ?? '',
-  };
+  apply(ctx as never, { provider: 'spawn', enableRunInBackground: false, ...options.config } as never)
+  if (tool === undefined) throw new Error('no tool registered')
+  const registered: Tool = tool
+
+  const call = async (args: Record<string, unknown>) => {
+    await registered.execute(
+      { description: 'probe', prompt: 'do the thing', ...args },
+      {
+        signal: new AbortController().signal,
+        agent: { id: 'parent', options: {}, session: { id: 's', requestHeader: () => undefined } },
+      },
+    )
+    return requests.at(-1)!
+  }
+  return { tool: registered, call, requests }
 }
 
-describe('tool-subagent-memory', () => {
-  it('registers subagent tool with global_memory parameter', () => {
-    const { tool } = createBench();
-    expect(tool.name).toBe('subagent');
-    const props = (tool.parameters as any).properties;
-    expect(props.global_memory).toBeDefined();
-    expect(props.global_memory.type).toBe('boolean');
-    expect(props.global_memory.description).toBe("include the user's global memory in the child's context");
-  });
+describe('the global_memory parameter', () => {
+  it('is offered when the provider can carry agentOptions', () => {
+    expect(createBench().tool.parameters.properties.global_memory?.type).toBe('boolean')
+  })
 
-  it('passes globalMemory option correctly to child agentOptions', async () => {
-    const b = createBench();
+  it('is absent where the provider cannot honor it', () => {
+    // Offering it there would make the parameter a way to fail every call.
+    expect(createBench({ capabilities: { agentOptions: false } }).tool.parameters.properties.global_memory).toBeUndefined()
+  })
+})
 
-    const mockAgent = {
-      id: 'parent-synth-agent',
-      session: {
-        header: { origin: 'user' },
-        requestHeader: () => undefined,
-        firstLiveSeq: 0,
-        eventAt: () => null,
-      },
-      options: {
-        provider: 'synth-provider',
-        model: 'synth-model',
-      },
-    };
+describe('what a delegation sends', () => {
+  it('sets agentOptions.globalMemory when the call asks for it', async () => {
+    const request = await createBench().call({ global_memory: true })
+    expect(request.agentOptions).toEqual({ globalMemory: true })
+  })
 
-    // 1. global_memory = true (foreground)
-    const resultTrue = await b.tool.execute(
-      {
-        description: 'Test subagent delegation',
-        prompt: 'Run task with memory',
-        global_memory: true,
-        run_in_background: false,
-      },
-      { agent: mockAgent, signal: new AbortController().signal },
-    );
+  it('sends no agentOptions at all for an ordinary call, exactly as upstream does', async () => {
+    const request = await createBench().call({})
+    expect(request).not.toHaveProperty('agentOptions')
+  })
 
-    expect(resultTrue.kind).toBe('foreground');
-    expect(b.starts.length).toBe(1);
-    expect((b.starts[0]?.request as any).agentOptions.globalMemory).toBe(true);
+  it('treats global_memory: false as not asking', async () => {
+    expect(await createBench().call({ global_memory: false })).not.toHaveProperty('agentOptions')
+  })
 
-    // 2. global_memory = false (background continuable)
-    const resultFalse = await b.tool.execute(
-      {
-        description: 'Test subagent delegation',
-        prompt: 'Run task without memory',
-        global_memory: false,
-        run_in_background: true,
-      },
-      { agent: mockAgent, signal: new AbortController().signal },
-    );
+  it('still delegates through a provider without the agentOptions capability', async () => {
+    // The ACP provider declares agentOptions: false. Sending an empty or
+    // false-valued agentOptions there is refused before the child starts.
+    const bench = createBench({ capabilities: { agentOptions: false }, config: { maxDepth: 'provider-managed' } })
+    await expect(bench.call({})).resolves.toBeDefined()
+  })
+})
 
-    expect(resultFalse.kind).toBe('continuable');
-    expect(b.continuables.length).toBe(1);
-    expect((b.continuables[0]?.request as any).agentOptions.globalMemory).toBe(false);
+describe('recursion depth', () => {
+  it('takes the deployment-wide depth when the tool configures none', async () => {
+    // A hard-coded default here would quietly override the operator's limit.
+    expect((await createBench().call({})).maxDepth).toBe(DEPLOYMENT_MAX_DEPTH)
+  })
 
-    // 3. global_memory omitted (background continuable default)
-    await b.tool.execute(
-      {
-        description: 'Test subagent delegation',
-        prompt: 'Run task with default memory',
-      },
-      { agent: mockAgent, signal: new AbortController().signal },
-    );
+  it('uses the tool\'s own depth when it configures one', async () => {
+    expect((await createBench({ config: { maxDepth: 4 } }).call({})).maxDepth).toBe(4)
+  })
 
-    expect(b.continuables.length).toBe(2);
-    expect((b.continuables[1]?.request as any).agentOptions.globalMemory).toBe(false);
-  });
-});
+  it('leaves depth to the provider when configured provider-managed', async () => {
+    const request = await createBench({ config: { maxDepth: 'provider-managed' } }).call({})
+    expect(request).not.toHaveProperty('maxDepth')
+  })
+})
