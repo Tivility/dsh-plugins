@@ -1,0 +1,72 @@
+{
+  "name": "@tivility/dsh-tool-subagent-memory",
+  "version": "0.1.0",
+  "description": "Model-facing subagent delegation tool with per-call global memory control for DeepSeek Harness 0.2",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./model-selection-settings": {
+      "types": "./lib/types/model-selection-settings.d.ts",
+      "default": "./lib/model-selection-settings.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "lib/**",
+    "src/**"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "subagent",
+    "delegation",
+    "memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tivility/dsh-plugins.git",
+    "directory": "packages/tool-subagent-memory"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-jobs": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-scope": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-projection": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-subagent": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-subagent": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-values": ">=0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "*",
+    "zod": "^3.0.0 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-jobs": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-subagent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "*",
+    "zod": "^4.4.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

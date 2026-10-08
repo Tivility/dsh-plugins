@@ -3,6 +3,8 @@
 Read-only browser preview of the files the harness works with, on the same HTTP
 server the Web GUI is already on.
 
+Targets DeepSeek Harness **0.1.x** (`@deepseek-ai/dsh-* ~0.1.1-rc.2`).
+
 ## The gap this fills
 
 The Web GUI has no way to open a file on the machine the harness runs on. That

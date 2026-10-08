@@ -3,6 +3,8 @@
 Drop a file on a page, get back its absolute path, paste that path to the
 agent.
 
+Targets DeepSeek Harness **0.1.x** (`@deepseek-ai/dsh-* ~0.1.1-rc.2`).
+
 ## The gap this fills
 
 The harness reads any file the agent is pointed at, but there is no way to

@@ -2,6 +2,8 @@
 
 A link that opens one session.
 
+Targets DeepSeek Harness **0.1.x** (`@deepseek-ai/dsh-* ~0.1.1-rc.2`).
+
 ## The gap this fills
 
 The harness's GUI opens wherever it was left. There is no URL that means *this

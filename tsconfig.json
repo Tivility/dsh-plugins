@@ -21,6 +21,15 @@
     },
     {
       "path": "./packages/tool-subagent-model"
+    },
+    {
+      "path": "./packages/compaction-window"
+    },
+    {
+      "path": "./packages/tool-subagent-memory"
+    },
+    {
+      "path": "./packages/tool-workflow-memory"
     }
   ]
 }

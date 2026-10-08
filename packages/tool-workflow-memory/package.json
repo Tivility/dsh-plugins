@@ -1,0 +1,76 @@
+{
+  "name": "@tivility/dsh-tool-workflow-memory",
+  "version": "0.1.0",
+  "description": "PTC-backed workflow tool with per-call global memory control for DeepSeek Harness 0.2",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./engine": {
+      "types": "./lib/types/engine.d.ts",
+      "default": "./lib/engine.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "lib/**",
+    "src/**"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "workflow",
+    "orchestration",
+    "memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tivility/dsh-plugins.git",
+    "directory": "packages/tool-workflow-memory"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-jobs": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-ptc-runtime": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-sandbox": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-sandbox-policy": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-subagent": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-workflow": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-values": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-workflow": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-workflow-ptc": ">=0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-jobs": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-sandbox": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-workflow": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-workflow": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-workflow-ptc": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
