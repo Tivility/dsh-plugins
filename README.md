@@ -16,13 +16,18 @@ and says so alongside the reason this repository exists:
 
 | Package | What it does |
 | ------- | ------------ |
-| [`@tivility/dsh-llm-affinity`](packages/llm-affinity) | Puts the harness session id on the wire so a gateway can key per-conversation state (prompt cache, account stickiness, Gemini `thoughtSignature` replay) |
-| [`@tivility/dsh-file-viewer`](packages/file-viewer) | Read-only browser preview of workspace files: listings, rendered Markdown, inline media, raw bytes |
-| [`@tivility/dsh-readonly-auth`](packages/readonly-auth) | Owner lock for a deployment more than one person can reach; provides the `ownerAuth` service |
-| [`@tivility/dsh-file-upload`](packages/file-upload) | Drag-and-drop upload into a workspace, gated by `ownerAuth` when it is installed |
-| [`@tivility/dsh-session-share`](packages/session-share) | A link that opens one session instead of wherever the GUI was left |
-| [`@tivility/dsh-tool-subagent-model`](packages/tool-subagent-model) | Delegation with per-call `model` / `provider` / `effort`, so one conversation can dispatch subtasks across a fleet |
-| [`@tivility/dsh-web-kit`](packages/web-kit) | **Library, not a plugin.** The browser-trust fence, path containment, and static-response plumbing the four web plugins share |
+| [`@tivility/dsh-compaction-window`](packages/compaction-window) | Per-session working context window and compaction settings; drop-in replacement for `dsh-compaction-basic` (DSH 0.2 line) |
+| [`@tivility/dsh-tool-subagent-memory`](packages/tool-subagent-memory) | Drop-in replacement for `dsh-tool-subagent` adding per-call `global_memory` parameter for child subagents (DSH 0.2 line) |
+| [`@tivility/dsh-tool-workflow-memory`](packages/tool-workflow-memory) | Drop-in replacement for `dsh-tool-workflow` adding per-call `globalMemory` support for workflow agents and PTC engine (DSH 0.2 line) |
+| [`@tivility/dsh-llm-affinity`](packages/llm-affinity) | Puts the harness session id on the wire so a gateway can key per-conversation state (prompt cache, account stickiness, Gemini `thoughtSignature` replay) (DSH 0.1 line) |
+| [`@tivility/dsh-file-viewer`](packages/file-viewer) | Read-only browser preview of workspace files: listings, rendered Markdown, inline media, raw bytes (DSH 0.1 line) |
+| [`@tivility/dsh-readonly-auth`](packages/readonly-auth) | Owner lock for a deployment more than one person can reach; provides the `ownerAuth` service (DSH 0.1 line) |
+| [`@tivility/dsh-file-upload`](packages/file-upload) | Drag-and-drop upload into a workspace, gated by `ownerAuth` when it is installed (DSH 0.1 line) |
+| [`@tivility/dsh-session-share`](packages/session-share) | A link that opens one session instead of wherever the GUI was left (DSH 0.1 line) |
+| [`@tivility/dsh-tool-subagent-model`](packages/tool-subagent-model) | Delegation with per-call `model` / `provider` / `effort`, so one conversation can dispatch subtasks across a fleet (targets DSH 0.1 line; use `tool-subagent-memory` for 0.2) |
+| [`@tivility/dsh-web-kit`](packages/web-kit) | **Library, not a plugin.** The browser-trust fence, path containment, and static-response plumbing the four web plugins share (DSH 0.1 line) |
+
+> **Harness Line Compatibility Note:** `@tivility/dsh-tool-subagent-model` targets the DSH 0.1 line, whereas `@tivility/dsh-tool-subagent-memory`, `@tivility/dsh-tool-workflow-memory`, and `@tivility/dsh-compaction-window` target the DSH 0.2 line.
 
 The four web plugins solve one problem between them: the harness's GUI is
 reachable from another machine, and nothing that machine can see is a file, a
