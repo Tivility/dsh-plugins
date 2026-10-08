@@ -19,11 +19,14 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: ({ icon, children, ...rest }: Record<string, unknown>) => (
     <button type="button" {...rest}>{icon as never}{children as never}</button>
   ),
-  IconLinkOutline16: () => <span data-icon="link" />,
-  IconCheckOutline16: () => <span data-icon="check" />,
+  // The current host's names; the legacy ones are absent, as on dsh >= 0.1.7.
+  IconLinkOutlineRegular: () => <span data-icon="link" />,
+  IconCheckOutlineRegular: () => <span data-icon="check" />,
+  IconLinkOutline16: undefined,
+  IconCheckOutline16: undefined,
 }))
 
-const { ShareLink } = await import('../src/client/ShareLink.tsx')
+const { ShareLink, resolveIcon } = await import('../src/client/ShareLink.tsx')
 
 /** The copy this control renders, as the framework would inject it. */
 const t = ((key: string) => ({ copy: 'Copy link', copied: 'Copied', hint: 'Copy a link' })[key]) as never
@@ -88,5 +91,33 @@ describe('ShareLink', () => {
     await act(async () => { button.click() })
     await act(async () => { button.click() })
     expect(writeClipboard).toHaveBeenCalledOnce()
+  })
+})
+
+describe('resolveIcon', () => {
+  const Current = () => <span data-icon="current" />
+  const Legacy = () => <span data-icon="legacy" />
+
+  it('prefers the current host name when it exists', () => {
+    expect(resolveIcon({ IconLinkOutlineRegular: Current, IconLinkOutline16: Legacy }, 'IconLinkOutlineRegular', 'IconLinkOutline16')).toBe(Current)
+  })
+
+  it('falls back to the legacy name on an older host', () => {
+    expect(resolveIcon({ IconLinkOutline16: Legacy }, 'IconLinkOutlineRegular', 'IconLinkOutline16')).toBe(Legacy)
+  })
+
+  it('renders nothing instead of crashing when the host exports neither', () => {
+    const Icon = resolveIcon({ Unrelated: 'not a component' }, 'IconLinkOutlineRegular', 'IconLinkOutline16')
+    expect(Icon({})).toBeNull()
+  })
+})
+
+describe('ShareLink icon', () => {
+  it('draws the link glyph from the host primitives, then the check after a copy', async () => {
+    writeClipboard.mockResolvedValue(true)
+    const button = mount()
+    expect(button.querySelector('[data-icon="link"]')).not.toBeNull()
+    await act(async () => { button.click() })
+    expect(button.querySelector('[data-icon="check"]')).not.toBeNull()
   })
 })
