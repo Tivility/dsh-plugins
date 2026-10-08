@@ -4,7 +4,7 @@
  * @module @tivility/dsh-compaction-window/types
  */
 
-import type { BasicCompactionConfig } from '@deepseek-ai/dsh-compaction-basic'
+import type { BasicCompactionConfig, ModelCompactPolicyConfig } from '@deepseek-ai/dsh-compaction-basic'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { CompactionEngine } from '@deepseek-ai/dsh-compaction'
 import type { TokenMeter } from '@deepseek-ai/dsh-token-meter'
@@ -47,10 +47,18 @@ export interface SessionCompactionSettings {
   headroomTokens?: number
 }
 
+/** A model policy that may also set that model's working window. */
+export interface CompactionWindowModelPolicy extends ModelCompactPolicyConfig {
+  /** Working context window for this provider/model. Clamped to its real window. Positive integer. */
+  contextWindow?: number
+}
+
 /** Compaction plugin configuration extending basic compaction with default contextWindow. */
-export interface CompactionWindowConfig extends BasicCompactionConfig {
+export interface CompactionWindowConfig extends Omit<BasicCompactionConfig, 'modelPolicies'> {
   /** Default working context window cap. Clamped to model's real window. Positive integer. */
   contextWindow?: number
+  /** Exact provider/model overrides, each optionally with its own working window. */
+  modelPolicies?: CompactionWindowModelPolicy[]
 }
 
 /** Source indicator for where an effective setting value originated. */
@@ -64,8 +72,16 @@ export interface EffectiveCompactionSettings {
   headroomTokens: { value: number; source: SettingSource }
   retainRatio?: { value: number; source: SettingSource }
   retainTokens?: { value: number; source: SettingSource }
+  /** Tokens at which pressure compaction starts; 0 when `problem` is set. */
   thresholdTokens: number
+  /** Recent tokens kept verbatim; 0 when `problem` is set. */
   effectiveRetainTokens: number
+  /**
+   * Why pressure compaction cannot run with these settings, when it cannot.
+   * The base engine reports this as a warning nobody sees and continues the
+   * turn uncompacted; this is where it becomes visible.
+   */
+  problem?: string
 }
 
 /** Compaction window service contract. */

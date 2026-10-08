@@ -3,7 +3,12 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "lib",
-    "declarationDir": "lib/types"
+    "declarationDir": "lib/types",
+    "lib": [
+      "ES2024"
+    ]
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts"
+  ]
 }

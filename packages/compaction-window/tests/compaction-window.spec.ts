@@ -16,14 +16,16 @@ import { CompactionWindowService } from '../src/index.js'
 
 const MODEL = 'test-model'
 
-class Mock1MAdapter extends LlmAdapter {
+class MockAdapter extends LlmAdapter {
+  constructor(private readonly window: number | undefined, private readonly defaultMaxTokens: number) { super() }
+
   override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     return Promise.resolve({
       provider,
       id: model,
       name: model,
-      context: { contextWindow: 1_000_000 },
-      defaultMaxTokens: 8_192,
+      ...this.window === undefined ? {} : { context: { contextWindow: this.window } },
+      defaultMaxTokens: this.defaultMaxTokens,
     })
   }
 
@@ -35,14 +37,14 @@ class Mock1MAdapter extends LlmAdapter {
   }
 }
 
-function createHarness(modelWindow = 1_000_000, pluginConfig = {}) {
+function createHarness(modelWindow: number | undefined = 1_000_000, pluginConfig = {}, defaultMaxTokens = 8_192) {
   const ctx = new Context()
   new LlmRuntime(ctx)
   new SessionStore(ctx)
   new SessionProjectionRegistry(ctx)
   new TokenMeter(ctx)
 
-  ctx.llm.registerAdapter([MODEL, 'test-provider'], new Mock1MAdapter())
+  ctx.llm.registerAdapter([MODEL, 'test-provider'], new MockAdapter(modelWindow, defaultMaxTokens))
 
   const service = new CompactionWindowService(ctx, pluginConfig)
   return { ctx, service }
@@ -172,9 +174,12 @@ describe('CompactionWindowService', () => {
     const session1 = ctx1.sessions.create(SessionId('s-persist'))
     appendTurn(session1, 1, 'Hello', 'Hi there!', 'You are a test agent.')
 
+    // A setting that works: 64k against the default 65,536 headroom would be
+    // refused before it ever reached the log.
     await service1.setSessionSettings(session1, {
       contextWindow: 64_000,
       thresholdRatio: 0.7,
+      headroomTokens: 8_000,
     })
 
     // Create a new context and load the same session events (simulating reload)
@@ -214,8 +219,129 @@ describe('CompactionWindowService', () => {
     session.append('step/start', { turn: 4, step: 1 })
 
     const agent = createAgent(session)
-    const result = await service.compactIfNeeded(agent, 'pressure')
+    const result = await service.compactIfNeeded(agent, 'pressure', new AbortController().signal)
     expect(result).not.toBeNull()
     expect(result?.shadowedSeqs.length).toBeGreaterThan(0)
+  })
+})
+
+/** A session whose context is well past any threshold, mid-turn, ready for a pressure check. */
+function heavySession(ctx: ReturnType<typeof createHarness>['ctx'], id: string): Session {
+  const session = ctx.sessions.create(SessionId(id))
+  for (let turn = 1; turn <= 3; turn += 1) {
+    appendTurn(session, turn, 'A'.repeat(250_000), 'B'.repeat(10_000), turn === 1 ? 'System prompt' : undefined, true)
+  }
+  session.append('turn/start', { turn: 4 })
+  session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: 'A'.repeat(250_000) }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+  session.append('step/start', { turn: 4, step: 1 })
+  return session
+}
+
+describe('settings that would leave compaction unable to run are refused (decision A)', () => {
+  it('refuses at activation a configured window smaller than the headroom it must leave', () => {
+    // 32k against the default 65,536-token headroom: no pressure budget at all,
+    // even before a single completion token is reserved.
+    expect(() => createHarness(1_000_000, { contextWindow: 32_000 })).toThrow(/contextWindow 32000 cannot work/)
+  })
+
+  it('refuses a model policy window the same way', () => {
+    expect(() => createHarness(1_000_000, {
+      modelPolicies: [{ provider: 'test-provider', model: MODEL, contextWindow: 64_000 }],
+    })).toThrow(/test-provider\/test-model contextWindow 64000 cannot work/)
+  })
+
+  it('accepts a small window once headroom is sized for it', () => {
+    expect(() => createHarness(1_000_000, { contextWindow: 32_000, headroomTokens: 8_000 })).not.toThrow()
+  })
+
+  it('refuses session settings that fail against the session\'s own model, and keeps none of them', async () => {
+    // The deployment this was found on: 32k completion reservation, default
+    // headroom. A 64k working window leaves no message budget there.
+    const { ctx, service } = createHarness(1_000_000, {}, 32_000)
+    const session = ctx.sessions.create(SessionId('s-refused'))
+    appendTurn(session, 1, 'Hello', 'Hi there!', 'You are a test agent.')
+
+    await expect(service.setSessionSettings(session, { contextWindow: 64_000 }))
+      .rejects.toThrow(/would leave pressure compaction unable to run/)
+    expect((await service.effectiveSettings(session)).contextWindow.source).toBe('default')
+  })
+
+  it('accepts the same window with headroom that fits it', async () => {
+    const { ctx, service } = createHarness(1_000_000, {}, 32_000)
+    const session = ctx.sessions.create(SessionId('s-accepted'))
+    appendTurn(session, 1, 'Hello', 'Hi there!', 'You are a test agent.')
+
+    await service.setSessionSettings(session, { contextWindow: 64_000, headroomTokens: 8_000, retainTokens: 4_000 })
+    const effective = await service.effectiveSettings(session)
+    expect(effective.problem).toBeUndefined()
+    expect(effective.thresholdTokens).toBe(24_000)
+  })
+
+  it('names the problem in effectiveSettings when a configured window cannot work for one model', async () => {
+    // Passes the activation check (it works with no reservation) but not with
+    // this model's 32k reservation — the case only the session's target shows.
+    const { ctx, service } = createHarness(1_000_000, { contextWindow: 100_000 }, 32_000)
+    const session = ctx.sessions.create(SessionId('s-problem'))
+    appendTurn(session, 1, 'Hello', 'Hi there!', 'You are a test agent.')
+
+    const effective = await service.effectiveSettings(session)
+    expect(effective.problem).toMatch(/retainTokens/)
+    expect(effective.thresholdTokens).toBe(0)
+  })
+})
+
+describe('where the working window comes from', () => {
+  it('takes a model policy window over the configured default', async () => {
+    const { ctx, service } = createHarness(1_000_000, {
+      contextWindow: 272_000,
+      modelPolicies: [{ provider: 'test-provider', model: MODEL, contextWindow: 200_000 }],
+    })
+    const session = ctx.sessions.create(SessionId('s-model-window'))
+    appendTurn(session, 1, 'Hello', 'Hi there!', 'You are a test agent.')
+    expect((await service.effectiveSettings(session)).contextWindow).toEqual({ value: 200_000, source: 'modelPolicy' })
+  })
+
+  it('takes a session window over a model policy window', async () => {
+    const { ctx, service } = createHarness(1_000_000, {
+      modelPolicies: [{ provider: 'test-provider', model: MODEL, contextWindow: 200_000 }],
+    })
+    const session = ctx.sessions.create(SessionId('s-session-window'))
+    appendTurn(session, 1, 'Hello', 'Hi there!', 'You are a test agent.')
+    await service.setSessionSettings(session, { contextWindow: 150_000 })
+    expect((await service.effectiveSettings(session)).contextWindow).toEqual({ value: 150_000, source: 'session' })
+  })
+
+  it('uses the configured window when the adapter reports none', async () => {
+    // The base engine refuses pressure compaction without a reported window;
+    // a window the operator declared is enough to measure against.
+    const { ctx, service } = createHarness(undefined, { contextWindow: 272_000 })
+    const session = heavySession(ctx, 's-no-adapter-window')
+    const result = await service.compactIfNeeded(createAgent(session), 'pressure', new AbortController().signal)
+    expect(result).not.toBeNull()
+  })
+})
+
+describe('the pressure decision is the base engine\'s', () => {
+  it('compacts at the working window, not the physical one', async () => {
+    // 650k estimated tokens: far under 80% of 1M, far over the 272k threshold.
+    const { ctx, service } = createHarness(1_000_000, { contextWindow: 272_000 })
+    const result = await service.compactIfNeeded(
+      createAgent(heavySession(ctx, 's-working')), 'pressure', new AbortController().signal)
+    expect(result).not.toBeNull()
+
+    const { ctx: plainCtx, service: plain } = createHarness(1_000_000)
+    const untouched = await plain.compactIfNeeded(
+      createAgent(heavySession(plainCtx, 's-physical')), 'pressure', new AbortController().signal)
+    expect(untouched).toBeNull()
+  })
+
+  it('leaves the engine untouched for a session with no window and no overrides', async () => {
+    const { ctx, service } = createHarness(1_000_000)
+    const session = ctx.sessions.create(SessionId('s-plain'))
+    appendTurn(session, 1, 'Hello', 'Hi there!', 'You are a test agent.')
+    expect(await service.compactIfNeeded(createAgent(session), 'pressure', new AbortController().signal)).toBeNull()
   })
 })

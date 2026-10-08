@@ -1,13 +1,10 @@
-/**
- * Durable per-session state for the user-controlled model-selection opt-in.
- * Upstream source: @deepseek-ai/dsh-tool-subagent@0.2.0-rc.2 (src/model-selection-state.ts)
- */
+/** Durable per-session state for the user-controlled model-selection opt-in. */
 
-import { z as zod } from 'zod';
-import type { Session } from '@deepseek-ai/dsh-session';
-import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection';
-import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection';
-import { assertAllowedModelRoutes, type AllowedModelRoute } from './model-selection.js';
+import { z as zod } from 'zod'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import { assertAllowedModelRoutes, type AllowedModelRoute } from './model-selection.js'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -19,22 +16,22 @@ declare module '@deepseek-ai/dsh-session/types' {
      */
     'subagent/model-selection-policy': {
       /** Exact routes this Session may select explicitly for a child. */
-      allowedModels: AllowedModelRoute[];
-    };
+      allowedModels: AllowedModelRoute[]
+    }
   }
 }
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
     /** Exact routes authorized for child LLM selection, or null when disabled. */
-    subagentModelSelectionPolicy: AllowedModelRoute[] | null;
+    subagentModelSelectionPolicy: AllowedModelRoute[] | null
   }
 }
 
 const modelSelectionPolicySchema: zod.ZodType<AllowedModelRoute[] | null> = zod.array(zod.object({
   provider: zod.string().min(1),
   model: zod.string().min(1),
-}).strict()).min(1).nullable();
+}).strict()).min(1).nullable()
 
 /** Host-only projection of the durable model-selection policy. */
 export const subagentModelSelectionProjectionDefinition = {
@@ -43,15 +40,15 @@ export const subagentModelSelectionProjectionDefinition = {
   stateSchema: modelSelectionPolicySchema,
   init: () => null,
   apply: (policy, event) => {
-    if (policy !== null || event.type !== 'subagent/model-selection-policy') return policy;
-    const { allowedModels } = event.data;
-    assertAllowedModelRoutes(allowedModels);
+    if (policy !== null || event.type !== 'subagent/model-selection-policy') return policy
+    const { allowedModels } = event.data
+    assertAllowedModelRoutes(allowedModels)
     if (allowedModels.length === 0) {
-      throw new Error('subagent/model-selection-policy requires at least one route');
+      throw new Error('subagent/model-selection-policy requires at least one route')
     }
-    return allowedModels;
+    return allowedModels
   },
-} satisfies ProjectionDefinition<'subagentModelSelectionPolicy', AllowedModelRoute[] | null>;
+} satisfies ProjectionDefinition<'subagentModelSelectionPolicy', AllowedModelRoute[] | null>
 
 /**
  * Read the exact route list captured for a model-selectable definition.
@@ -63,7 +60,7 @@ export function subagentModelSelectionPolicy(
   projections: Pick<SessionProjectionRegistry, 'stateOf'>,
   session: Session,
 ): AllowedModelRoute[] | undefined {
-  return projections.stateOf(session, 'subagentModelSelectionPolicy')?.map(route => ({ ...route }));
+  return projections.stateOf(session, 'subagentModelSelectionPolicy')?.map(route => ({ ...route }))
 }
 
 /**
@@ -77,8 +74,8 @@ export function recordSubagentModelSelection(
   session: Session,
   allowedModels: readonly AllowedModelRoute[],
 ): void {
-  if (subagentModelSelectionPolicy(projections, session) !== undefined) return;
+  if (subagentModelSelectionPolicy(projections, session) !== undefined) return
   session.append('subagent/model-selection-policy', {
     allowedModels: allowedModels.map(route => ({ ...route })),
-  });
+  })
 }

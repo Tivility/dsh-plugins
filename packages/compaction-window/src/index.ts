@@ -1,35 +1,35 @@
 /**
  * Per-session working context window and compaction service.
  *
+ * A drop-in `compaction` service that is `@deepseek-ai/dsh-compaction-basic`
+ * with one more input: a working window, smaller than the model's physical one,
+ * that pressure compaction is measured against.
+ *
+ * The pressure decision itself stays the base engine's. This class never
+ * re-implements `compactIfNeeded`; it calls the inherited one through a view in
+ * which the conversation target's context window is capped and that session's
+ * policy overrides are expressed as an ordinary model policy. Everything else —
+ * the compaction lock, tool-result pruning, retry, the warning dedupe keyed on
+ * the base's own error class — is the harness's code at whatever version the
+ * host runs, so a fix upstream reaches this plugin without a release of it.
  * @module @tivility/dsh-compaction-window
  */
 
-import { Context } from '@deepseek-ai/cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import {
-  BasicCompactionEngine,
-  type BasicCompactionConfig,
-  type ModelCompactPolicyConfig,
-  type ResolvedConfig,
-  type ResolvedTargetPolicy,
-} from '@deepseek-ai/dsh-compaction-basic'
-import {
-  resolveCompactSpec,
-  resolveConfig,
-  resolveTargetPolicy,
-  TargetPressureConfigError,
-} from './math.js'
+import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
+import type { ModelCompactPolicyConfig, ResolvedConfig, ResolvedTargetPolicy } from '@deepseek-ai/dsh-compaction-basic'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
-import { toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { TokenMeasurement } from '@deepseek-ai/dsh-token-meter'
+import type { LlmCallConfig, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import { resolveCompactSpec, resolveTargetPolicy } from './math.js'
 import { compactionWindowProjectionDefinition, sessionCompactionSettingsSchema } from './projection.js'
 import type {
   CompactionWindowConfig,
   CompactionWindowEngine,
+  CompactionWindowModelPolicy,
   EffectiveCompactionSettings,
   SessionCompactionSettings,
   SettingSource,
@@ -38,370 +38,310 @@ import type {
 export type * from './types.js'
 export { compactionWindowProjectionDefinition } from './projection.js'
 
-function routedTarget(
-  session: Session,
-): Pick<LlmCallConfig, 'provider' | 'model'> | undefined {
+type Target = Pick<LlmCallConfig, 'provider' | 'model'>
+
+/** The base engine's own target rule: the routed request header, nothing else. */
+function routedTarget(session: Session): Target | undefined {
   const config = session.requestHeader()?.config
-  if (config === undefined || config.provider.length === 0 || config.model.length === 0) {
-    return undefined
-  }
+  if (config === undefined || config.provider.length === 0 || config.model.length === 0) return undefined
   return { provider: config.provider, model: config.model }
 }
 
-function conversationTarget(
-  agent: Agent,
-): Pick<LlmCallConfig, 'provider' | 'model'> | undefined {
-  const routed = routedTarget(agent.session)
-  if (routed !== undefined) return routed
-  if (
-    agent.options.provider === undefined || agent.options.provider.length === 0
-    || agent.options.model === undefined || agent.options.model.length === 0
-  ) return undefined
-  return { provider: agent.options.provider, model: agent.options.model }
+/** The base engine's own reservation rule. */
+function reservedCompletionTokens(session: Session, defaultMaxTokens: number | undefined): number {
+  return session.requestHeader()?.config.maxTokens ?? defaultMaxTokens ?? 0
 }
 
-function reservedCompletionTokens(agent: Agent, defaultMaxTokens: number | undefined): number {
-  const configured = agent.session.requestHeader()?.config.maxTokens
-  return configured ?? defaultMaxTokens ?? 0
-}
+/** The policy fields a session may override; the rest of a model policy stays the operator's. */
+type PolicyOverride = Omit<SessionCompactionSettings, 'contextWindow'>
 
 /**
- * System head check matching DSH compaction-basic.
+ * A copy of `config` whose model policy for `target` carries `override`.
+ *
+ * This is how a session's settings reach the base engine: as the model policy
+ * it already knows how to resolve. Retention is one setting with two spellings,
+ * so a session that names one drops the other it would otherwise inherit.
  */
-function systemHead(session: Session, headSeq: SessionSeq) {
-  const head = session.eventAt(headSeq)
-  return head?.type === 'system/message' ? head : undefined
-}
-
-/**
- * Select compactable range matching DSH compaction-basic logic.
- */
-function selectCompactableRange(
-  session: Session,
-  measurement: TokenMeasurement,
-  retainTokens: number,
-): { start: SessionSeq; end: SessionSeq } | null {
-  const pricedNodes = measurement.nodes
-  if (pricedNodes.length === 0) return null
-  const surfaceNodes = session.surface.nodes
-  if (surfaceNodes.length !== pricedNodes.length || surfaceNodes.some((seq, index) => seq !== pricedNodes[index]?.seq)) {
-    throw new Error('compaction: token-meter surface does not match the current session surface')
+function withTargetPolicy(config: ResolvedConfig, target: Target, override: PolicyOverride): ResolvedConfig {
+  const existing = config.modelPolicies.find(p => p.provider === target.provider && p.model === target.model)
+  const merged: ModelCompactPolicyConfig = {
+    ...existing ?? { provider: target.provider, model: target.model },
+    ...override,
   }
-  const firstIdx = systemHead(session, surfaceNodes[0]!) === undefined ? 0 : 1
-  let accumulated = 0
-  let keepFromIdx = pricedNodes.length
-  for (let index = pricedNodes.length - 1; index >= 0; index -= 1) {
-    accumulated += pricedNodes[index]!.tokens
-    keepFromIdx = index
-    if (accumulated >= retainTokens) break
-  }
-  if (keepFromIdx <= firstIdx) return null
-  while (keepFromIdx > firstIdx) {
-    if (toolPairingBalancedBefore(session, surfaceNodes[keepFromIdx]!)) break
-    keepFromIdx -= 1
-  }
-  if (keepFromIdx <= firstIdx) return null
+  if (override.retainTokens !== undefined) delete merged.retainRatio
+  if (override.retainRatio !== undefined) delete merged.retainTokens
   return {
-    start: surfaceNodes[firstIdx]!,
-    end: surfaceNodes[keepFromIdx - 1]!,
+    ...config,
+    modelPolicies: [merged, ...config.modelPolicies.filter(p => p !== existing)],
   }
 }
 
-const thresholdRatioSchema = z.number()
-const headroomTokensSchema = z.number().step(1).min(0)
-const retainRatioSchema = z.number()
-const retainTokensSchema = z.number().step(1).min(0)
-const summarizationProviderSchema = z.string()
-const summarizationModelSchema = z.string()
-const maxTokensSchema = z.number().step(1).min(1)
-const compactionRetriesSchema = z.number().step(1).min(0)
-const maxOverflowRetriesSchema = z.number().step(1).min(0)
+/** Only the defined fields, so an absent override never shadows a configured value. */
+function definedOverride(settings: SessionCompactionSettings | null): PolicyOverride {
+  const override: PolicyOverride = {}
+  if (settings === null) return override
+  if (settings.thresholdRatio !== undefined) override.thresholdRatio = settings.thresholdRatio
+  if (settings.headroomTokens !== undefined) override.headroomTokens = settings.headroomTokens
+  if (settings.retainRatio !== undefined) override.retainRatio = settings.retainRatio
+  if (settings.retainTokens !== undefined) override.retainTokens = settings.retainTokens
+  return override
+}
+
+/** A function value bound to its owner, anything else as is. */
+function bound(owner: object, key: PropertyKey): unknown {
+  const value: unknown = Reflect.get(owner, key, owner)
+  return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(owner) : value
+}
+
 const contextWindowSchema = z.number().step(1).min(1)
 
-const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
+const modelPolicy: z<CompactionWindowModelPolicy> = z.object({
   provider: z.string().required(),
   model: z.string().required(),
-  thresholdRatio: thresholdRatioSchema,
-  headroomTokens: headroomTokensSchema,
-  retainRatio: retainRatioSchema,
-  retainTokens: retainTokensSchema,
-  summarizationProvider: summarizationProviderSchema,
-  summarizationModel: summarizationModelSchema,
-  maxTokens: maxTokensSchema,
-  compactionRetries: compactionRetriesSchema,
-  maxOverflowRetries: maxOverflowRetriesSchema,
-}) as z<ModelCompactPolicyConfig>
+  contextWindow: contextWindowSchema,
+  thresholdRatio: z.number(),
+  headroomTokens: z.number().step(1).min(0),
+  retainRatio: z.number(),
+  retainTokens: z.number().step(1).min(0),
+  summarizationProvider: z.string(),
+  summarizationModel: z.string(),
+  maxTokens: z.number().step(1).min(1),
+  compactionRetries: z.number().step(1).min(0),
+  maxOverflowRetries: z.number().step(1).min(0),
+}) as z<CompactionWindowModelPolicy>
 
 /**
- * CompactionWindowService replaces `@deepseek-ai/dsh-compaction-basic`, providing
- * the `compaction` service with support for per-session contextWindow and policy overrides.
+ * `compaction` with a working window. See the module comment for why the
+ * pressure decision is delegated rather than re-implemented.
  */
 export class CompactionWindowService extends BasicCompactionEngine implements CompactionWindowEngine {
   static override inject = ['llm', 'tokenMeter', 'sessions', 'sessionProjections']
 
   static override Config: z<CompactionWindowConfig> = z.object({
     contextWindow: contextWindowSchema,
-    thresholdRatio: thresholdRatioSchema,
-    headroomTokens: headroomTokensSchema,
-    retainRatio: retainRatioSchema,
-    retainTokens: retainTokensSchema,
-    summarizationProvider: summarizationProviderSchema,
-    summarizationModel: summarizationModelSchema,
-    maxTokens: maxTokensSchema,
-    compactionRetries: compactionRetriesSchema,
-    maxOverflowRetries: maxOverflowRetriesSchema,
+    thresholdRatio: z.number(),
+    headroomTokens: z.number().step(1).min(0),
+    retainRatio: z.number(),
+    retainTokens: z.number().step(1).min(0),
+    summarizationProvider: z.string(),
+    summarizationModel: z.string(),
+    maxTokens: z.number().step(1).min(1),
+    compactionRetries: z.number().step(1).min(0),
+    maxOverflowRetries: z.number().step(1).min(0),
     modelPolicies: z.array(modelPolicy),
     auto: z.boolean(),
   }) as z<CompactionWindowConfig>
 
-  private readonly rawPluginConfig: CompactionWindowConfig
-  private readonly configuredContextWindow?: number
+  private readonly configuredWindow: number | undefined
+  private readonly modelWindows: ReadonlyMap<string, number>
+  /** Top-level policy keys the operator set, as opposed to the base's defaults. */
+  private readonly explicitKeys: ReadonlySet<string>
 
   constructor(ctx: Context, config: CompactionWindowConfig = {}) {
-    const { contextWindow, ...basicConfig } = config
-    super(ctx, basicConfig)
-    this.rawPluginConfig = config
-    this.configuredContextWindow = contextWindow
+    const { contextWindow, modelPolicies, ...rest } = config
+    // The base validates model policies strictly, so the one key it does not
+    // know is lifted out here and kept beside it.
+    const windows = new Map<string, number>()
+    const basicPolicies = modelPolicies?.map(({ contextWindow: window, ...policy }) => {
+      if (window !== undefined) windows.set(`${policy.provider}/${policy.model}`, window)
+      return policy
+    })
+    super(ctx, { ...rest, ...basicPolicies === undefined ? {} : { modelPolicies: basicPolicies } })
+    this.configuredWindow = contextWindow
+    this.modelWindows = windows
+    this.explicitKeys = new Set(Object.keys(rest).filter(key => rest[key as keyof typeof rest] !== undefined))
+    this.assertConfiguredWindowsWork()
     ctx.sessionProjections.register(compactionWindowProjectionDefinition)
   }
 
   /**
-   * Set per-session compaction settings overrides.
-   * Persisted as a `compaction/settings` event on the session log.
+   * Refuse, at activation, a configured window that can never leave a
+   * pressure budget — even before any completion tokens are reserved.
+   *
+   * Headroom is an absolute token count, sized for physical windows in the
+   * hundreds of thousands. Below roughly twice it a working window has no room
+   * left to measure pressure in, and the base engine's response is a warning
+   * the user never sees and a turn that continues uncompacted. Failing the load
+   * is the only place this can be said out loud.
    */
+  private assertConfiguredWindowsWork(): void {
+    const check = (window: number, policy: ResolvedTargetPolicy, where: string): void => {
+      try {
+        resolveCompactSpec(policy, window, 0)
+      } catch (error: unknown) {
+        throw new Error(
+          `compaction-window: ${where} contextWindow ${String(window)} cannot work with its compaction policy — `
+          + `${(error as Error).message}. Raise contextWindow, or lower headroomTokens / retainRatio / retainTokens.`,
+        )
+      }
+    }
+    if (this.configuredWindow !== undefined) {
+      // `*/*`: the default policy, the one every model without its own falls back to.
+      check(this.configuredWindow, resolveTargetPolicy(this.config, { provider: '*', model: '*' }), 'the configured')
+    }
+    for (const [key, window] of this.modelWindows) {
+      const [provider = '', model = ''] = key.split('/')
+      check(window, resolveTargetPolicy(this.config, { provider, model }), `the ${key}`)
+    }
+  }
+
+  /** Persist per-session overrides, after checking they leave compaction working. */
   async setSessionSettings(session: Session, settings: SessionCompactionSettings): Promise<void> {
     const parsed = sessionCompactionSettingsSchema.parse(settings)
+    const effective = await this.resolveEffective(session, parsed)
+    if (effective.problem !== undefined) {
+      throw new Error(
+        `compaction-window: these settings would leave pressure compaction unable to run — ${effective.problem}`,
+      )
+    }
     await session.append('compaction/settings', { settings: parsed })
   }
 
-  /**
-   * Clear per-session compaction settings overrides.
-   */
+  /** Clear per-session overrides. */
   async clearSessionSettings(session: Session): Promise<void> {
     await session.append('compaction/settings', { settings: null })
   }
 
-  /**
-   * Resolve effective settings with source annotations for a session.
-   */
+  /** Effective settings with where each came from, and why compaction cannot run if it cannot. */
   async effectiveSettings(session: Session, signal?: AbortSignal): Promise<EffectiveCompactionSettings> {
-    const target = routedTarget(session) ?? { provider: '', model: '' }
-    const modelInfo = (target.provider && target.model)
-      ? await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal).catch(() => undefined)
-      : undefined
-
-    const realContextWindow = modelInfo?.context?.contextWindow ?? 0
-    const sessionSettings = this.getSessionSettings(session)
-
-    // Precedence for modelPolicy
-    const matchingPolicy = target.provider && target.model
-      ? this.config.modelPolicies.find(p => p.provider === target.provider && p.model === target.model)
-      : undefined
-
-    // 1. contextWindow
-    let contextWindowVal = realContextWindow
-    let contextWindowSource: SettingSource = 'default'
-
-    if (sessionSettings?.contextWindow !== undefined) {
-      contextWindowVal = realContextWindow > 0
-        ? Math.min(sessionSettings.contextWindow, realContextWindow)
-        : sessionSettings.contextWindow
-      contextWindowSource = 'session'
-    } else if (this.configuredContextWindow !== undefined) {
-      contextWindowVal = realContextWindow > 0
-        ? Math.min(this.configuredContextWindow, realContextWindow)
-        : this.configuredContextWindow
-      contextWindowSource = 'config'
-    }
-
-    // 2. thresholdRatio
-    let thresholdRatioVal = 0.8
-    let thresholdRatioSource: SettingSource = 'default'
-    if (sessionSettings?.thresholdRatio !== undefined) {
-      thresholdRatioVal = sessionSettings.thresholdRatio
-      thresholdRatioSource = 'session'
-    } else if (matchingPolicy?.thresholdRatio !== undefined) {
-      thresholdRatioVal = matchingPolicy.thresholdRatio
-      thresholdRatioSource = 'modelPolicy'
-    } else if (this.rawPluginConfig.thresholdRatio !== undefined) {
-      thresholdRatioVal = this.rawPluginConfig.thresholdRatio
-      thresholdRatioSource = 'config'
-    }
-
-    // 3. headroomTokens
-    let headroomTokensVal = 65_536
-    let headroomTokensSource: SettingSource = 'default'
-    if (sessionSettings?.headroomTokens !== undefined) {
-      headroomTokensVal = sessionSettings.headroomTokens
-      headroomTokensSource = 'session'
-    } else if (matchingPolicy?.headroomTokens !== undefined) {
-      headroomTokensVal = matchingPolicy.headroomTokens
-      headroomTokensSource = 'modelPolicy'
-    } else if (this.rawPluginConfig.headroomTokens !== undefined) {
-      headroomTokensVal = this.rawPluginConfig.headroomTokens
-      headroomTokensSource = 'config'
-    }
-
-    // 4. retention
-    let retainRatioEntry: { value: number; source: SettingSource } | undefined
-    let retainTokensEntry: { value: number; source: SettingSource } | undefined
-
-    if (sessionSettings?.retainTokens !== undefined) {
-      retainTokensEntry = { value: sessionSettings.retainTokens, source: 'session' }
-    } else if (sessionSettings?.retainRatio !== undefined) {
-      retainRatioEntry = { value: sessionSettings.retainRatio, source: 'session' }
-    } else if (matchingPolicy?.retainTokens !== undefined) {
-      retainTokensEntry = { value: matchingPolicy.retainTokens, source: 'modelPolicy' }
-    } else if (matchingPolicy?.retainRatio !== undefined) {
-      retainRatioEntry = { value: matchingPolicy.retainRatio, source: 'modelPolicy' }
-    } else if (this.rawPluginConfig.retainTokens !== undefined) {
-      retainTokensEntry = { value: this.rawPluginConfig.retainTokens, source: 'config' }
-    } else if (this.rawPluginConfig.retainRatio !== undefined) {
-      retainRatioEntry = { value: this.rawPluginConfig.retainRatio, source: 'config' }
-    } else {
-      retainRatioEntry = { value: 0.16, source: 'default' }
-    }
-
-    const defaultMaxTokens = modelInfo?.defaultMaxTokens
-    const headerMaxTokens = session.requestHeader()?.config?.maxTokens
-    const reservedTokens = headerMaxTokens ?? defaultMaxTokens ?? 0
-    const messageBudgetTokens = Math.max(0, contextWindowVal - reservedTokens)
-    const pressureBudgetTokens = Math.max(0, messageBudgetTokens - headroomTokensVal)
-    const thresholdTokens = Math.floor(Math.min(contextWindowVal * thresholdRatioVal, pressureBudgetTokens))
-
-    let effectiveRetainTokens = 0
-    if (retainTokensEntry !== undefined) {
-      effectiveRetainTokens = retainTokensEntry.value
-    } else if (retainRatioEntry !== undefined) {
-      effectiveRetainTokens = Math.floor(messageBudgetTokens * retainRatioEntry.value)
-    }
-
-    return {
-      contextWindow: { value: contextWindowVal, source: contextWindowSource },
-      realContextWindow,
-      thresholdRatio: { value: thresholdRatioVal, source: thresholdRatioSource },
-      headroomTokens: { value: headroomTokensVal, source: headroomTokensSource },
-      ...(retainRatioEntry ? { retainRatio: retainRatioEntry } : {}),
-      ...(retainTokensEntry ? { retainTokens: retainTokensEntry } : {}),
-      thresholdTokens,
-      effectiveRetainTokens,
-    }
+    return await this.resolveEffective(session, this.sessionSettings(session), signal)
   }
 
-  private getSessionSettings(session: Session): SessionCompactionSettings | null {
-    return this.ctx.sessionProjections.stateOf(session, 'compaction-window') ?? null
-  }
-
-  /**
-   * Intercept compactIfNeeded to use session/config contextWindow & policy overrides.
-   */
   override async compactIfNeeded(
     agent: Agent,
     trigger: CompactionTrigger,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ): Promise<CompactionResult | null> {
-    const sessionSettings = this.getSessionSettings(agent.session)
-    const hasSessionSettings = sessionSettings !== null && Object.keys(sessionSettings).length > 0
+    const target = routedTarget(agent.session)
+    const settings = this.sessionSettings(agent.session)
+    const window = target === undefined ? undefined : this.workingWindow(settings, target).value
+    const override = definedOverride(settings)
+    if (target === undefined || (window === undefined && Object.keys(override).length === 0)) {
+      return await super.compactIfNeeded(agent, trigger, signal)
+    }
+    const view = this.viewFor(target, window, override)
+    return await BasicCompactionEngine.prototype.compactIfNeeded.call(view, agent, trigger, signal)
+  }
 
-    // If no session overrides and no top-level contextWindow configured, delegate directly to super
-    if (!hasSessionSettings && this.configuredContextWindow === undefined) {
-      return super.compactIfNeeded(agent, trigger, signal ?? new AbortController().signal)
+  private sessionSettings(session: Session): SessionCompactionSettings | null {
+    return this.ctx.sessionProjections.stateOf(session, 'compaction-window') ?? null
+  }
+
+  /** Session, then model policy, then the configured default; undefined means the physical window. */
+  private workingWindow(
+    settings: SessionCompactionSettings | null,
+    target: Target,
+  ): { value: number | undefined; source: SettingSource } {
+    if (settings?.contextWindow !== undefined) return { value: settings.contextWindow, source: 'session' }
+    const byModel = this.modelWindows.get(`${target.provider}/${target.model}`)
+    if (byModel !== undefined) return { value: byModel, source: 'modelPolicy' }
+    if (this.configuredWindow !== undefined) return { value: this.configuredWindow, source: 'config' }
+    return { value: undefined, source: 'default' }
+  }
+
+  /**
+   * This engine as the base sees it for one call: `config` carrying the
+   * session's policy for `target`, and `ctx.llm` answering that one target's
+   * context window with the working window.
+   *
+   * Only `resolveModelInfo` for the conversation target is changed. The base
+   * reads it once, to size pressure; summarization asks the adapter for
+   * nothing, so the cap cannot shrink what a summary is allowed to read.
+   * Methods the base calls on `this` see the view, so the whole call — region
+   * compaction included — runs against the same inputs.
+   */
+  private viewFor(target: Target, window: number | undefined, override: PolicyOverride): this {
+    const config = Object.keys(override).length === 0 ? this.config : withTargetPolicy(this.config, target, override)
+    const realCtx = this.ctx
+    const llm = realCtx.llm
+    const cappedLlm = window === undefined ? llm : new Proxy(llm, {
+      get(owner, key) {
+        if (key !== 'resolveModelInfo') return bound(owner, key)
+        return async (provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> => {
+          const info = await owner.resolveModelInfo(provider, model, signal)
+          if (provider !== target.provider || model !== target.model) return info
+          // An adapter that reports no window still has the one the operator
+          // declared: effective = min(working, physical), and physical unknown.
+          const physical = info.context?.contextWindow
+          return {
+            ...info,
+            context: { ...info.context, contextWindow: physical === undefined ? window : Math.min(window, physical) },
+          }
+        }
+      },
+    })
+    const ctx = new Proxy(realCtx, {
+      get(owner, key) { return key === 'llm' ? cappedLlm : bound(owner, key) },
+    })
+    return new Proxy(this, {
+      get(owner, key, receiver) {
+        if (key === 'config') return config
+        if (key === 'ctx') return ctx
+        return Reflect.get(owner, key, receiver)
+      },
+    })
+  }
+
+  /**
+   * One resolution shared by `effectiveSettings` and the check in
+   * `setSessionSettings`, so what is displayed and what is accepted can never
+   * disagree. The arithmetic mirrors the base engine's; the decision to compact
+   * is still the base engine's own.
+   */
+  private async resolveEffective(
+    session: Session,
+    settings: SessionCompactionSettings | null,
+    signal?: AbortSignal,
+  ): Promise<EffectiveCompactionSettings> {
+    const target = routedTarget(session)
+    const info = target === undefined
+      ? undefined
+      : await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal).catch(() => undefined)
+    const realContextWindow = info?.context?.contextWindow ?? 0
+    const working = this.workingWindow(settings, target ?? { provider: '', model: '' })
+    const contextWindow = working.value === undefined
+      ? realContextWindow
+      : realContextWindow > 0 ? Math.min(working.value, realContextWindow) : working.value
+
+    const override = definedOverride(settings)
+    const policyTarget = target ?? { provider: '', model: '' }
+    const config = Object.keys(override).length === 0 ? this.config : withTargetPolicy(this.config, policyTarget, override)
+    const policy = resolveTargetPolicy(config, policyTarget)
+    const configured = this.config.modelPolicies.find(p => p.provider === policyTarget.provider && p.model === policyTarget.model)
+    const sourceOf = (key: keyof PolicyOverride): SettingSource => {
+      if (settings?.[key] !== undefined) return 'session'
+      if (configured?.[key] !== undefined) return 'modelPolicy'
+      return this.explicitKeys.has(key) ? 'config' : 'default'
     }
 
-    const target = conversationTarget(agent)
-    if (target === undefined) return null
-
-    const meter = this.ctx.tokenMeter
-    let measurement = meter.measure(agent.session)
-
-    if (trigger === 'context-overflow') {
-      const prune = this.ctx.get('toolResultPruner')
-      if (prune !== undefined) {
-        prune.pruneSession(agent.session)
-        measurement = meter.measure(agent.session)
+    let thresholdTokens = 0
+    let effectiveRetainTokens = 0
+    let problem: string | undefined
+    if (contextWindow > 0) {
+      // Without a target the reservation is unknown; zero is the most
+      // permissive case, so a failure there is a failure everywhere.
+      const reserved = target === undefined ? 0 : reservedCompletionTokens(session, info?.defaultMaxTokens)
+      try {
+        const spec = resolveCompactSpec(policy, contextWindow, reserved)
+        thresholdTokens = spec.thresholdTokens
+        effectiveRetainTokens = spec.retainTokens
+      } catch (error: unknown) {
+        problem = (error as Error).message
       }
-      const range = selectCompactableRange(agent.session, measurement, 0)
-      if (range === null) return null
-      return this.compactRegion(range.start, range.end, agent, signal)
     }
 
-    const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)
-    const targetKey = `${target.provider}/${target.model}`
-    if (info.context === undefined) {
-      throw new TargetPressureConfigError(
-        targetKey,
-        `compaction-window: no context capacity for ${targetKey}; `
-        + 'configure contextWindow on that adapter model',
-      )
+    return {
+      contextWindow: { value: contextWindow, source: working.source },
+      realContextWindow,
+      thresholdRatio: { value: policy.thresholdRatio, source: sourceOf('thresholdRatio') },
+      headroomTokens: { value: policy.headroomTokens, source: sourceOf('headroomTokens') },
+      ...policy.retainTokens === undefined
+        ? { retainRatio: { value: policy.retainRatio, source: sourceOf('retainRatio') } }
+        : { retainTokens: { value: policy.retainTokens, source: sourceOf('retainTokens') } },
+      thresholdTokens,
+      effectiveRetainTokens,
+      ...problem === undefined ? {} : { problem },
     }
-
-    const realContextWindow = info.context.contextWindow
-    let effectiveContextWindow = realContextWindow
-
-    if (sessionSettings?.contextWindow !== undefined) {
-      effectiveContextWindow = Math.min(sessionSettings.contextWindow, realContextWindow)
-    } else if (this.configuredContextWindow !== undefined) {
-      effectiveContextWindow = Math.min(this.configuredContextWindow, realContextWindow)
-    }
-
-    // Resolve base policy from config + modelPolicies
-    const basePolicy = resolveTargetPolicy(this.config, target)
-
-    // Apply session overrides if any
-    let retentionFields: { readonly retainTokens: number } | { readonly retainRatio: number }
-    if (sessionSettings?.retainTokens !== undefined) {
-      retentionFields = { retainTokens: sessionSettings.retainTokens }
-    } else if (sessionSettings?.retainRatio !== undefined) {
-      retentionFields = { retainRatio: sessionSettings.retainRatio }
-    } else if (basePolicy.retainTokens !== undefined) {
-      retentionFields = { retainTokens: basePolicy.retainTokens }
-    } else {
-      retentionFields = { retainRatio: basePolicy.retainRatio }
-    }
-
-    const mergedPolicy: ResolvedTargetPolicy = {
-      target: basePolicy.target,
-      thresholdRatio: sessionSettings?.thresholdRatio ?? basePolicy.thresholdRatio,
-      headroomTokens: sessionSettings?.headroomTokens ?? basePolicy.headroomTokens,
-      summarizationProvider: basePolicy.summarizationProvider,
-      summarizationModel: basePolicy.summarizationModel,
-      maxTokens: basePolicy.maxTokens,
-      compactionRetries: basePolicy.compactionRetries,
-      maxOverflowRetries: basePolicy.maxOverflowRetries,
-      ...retentionFields,
-    }
-
-    const spec = resolveCompactSpec(
-      mergedPolicy,
-      effectiveContextWindow,
-      reservedCompletionTokens(agent, info.defaultMaxTokens),
-    )
-
-    if (measurement.totalTokens < spec.thresholdTokens) return null
-
-    const prune = this.ctx.get('toolResultPruner')
-    if (prune !== undefined) {
-      prune.pruneSession(agent.session)
-      measurement = meter.measure(agent.session)
-    }
-    if (measurement.totalTokens < spec.thresholdTokens) return null
-
-    let result: CompactionResult | null = null
-    for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
-      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens)
-      if (range === null) {
-        if (result === null) return null
-        break
-      }
-      result = await this.compactRegion(range.start, range.end, agent, signal)
-      measurement = meter.measure(agent.session)
-      if (measurement.totalTokens < spec.thresholdTokens) return result
-    }
-
-    throw new Error(
-      `compaction still above threshold after ${spec.compactionRetries + 1} compaction attempts `
-      + `(${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`,
-    )
   }
 }
 

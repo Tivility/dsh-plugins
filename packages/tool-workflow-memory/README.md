@@ -1,17 +1,38 @@
 # @tivility/dsh-tool-workflow-memory
 
-> Target line: **DeepSeek Harness 0.2** (`>=0.2.0-rc.2`)
+Targets the DeepSeek Harness **0.2** line — `0.2.0-rc.2` and every later 0.2 prerelease or release, below 0.3.
 
 Model-facing workflow tool and PTC workflow engine for DeepSeek Harness 0.2 with per-call global memory control.
 
 This plugin is a drop-in replacement for `@deepseek-ai/dsh-tool-workflow` and `@deepseek-ai/dsh-workflow-ptc` (0.2 line). It adds a `globalMemory` option to the guest workflow `agent(prompt, opts)` function, allowing individual subagents spawned within a workflow script to request the caller's global memory.
 
+## Installation
+
+```sh
+dsh plugin add @tivility/dsh-tool-workflow-memory
+```
+
+On DeepSeek Harness 0.2 the row this package replaces lives **inside each agent preset** — in `dsh web` the host-level copy is disabled. Two things that look like they should install it do not:
+
+- a profile patch with the same `id` and this package's `name` is skipped (`patch: name mismatch … skipping`, logged once at boot);
+- a profile patch cannot address a row inside a preset at all.
+
+So it is installed by declaring a preset: a shipped one, with its `workflow-ptc` row renamed to `@tivility/dsh-tool-workflow-memory/engine` and its `tool-workflow` row to this package. [`scripts/derive-preset.mjs`](../../scripts/derive-preset.mjs) derives it from the composition the host is running, so nothing is copied that could fall behind a harness release:
+
+```sh
+dsh --profile web --dump-config \
+  | node scripts/derive-preset.mjs --dsh <dsh install dir> --id memory --name 记忆模式 --with tool-workflow-memory \
+  > /tmp/memory-preset.yml
+```
+
+Add the generated row to `~/.dsh/profiles/web/cordis.patch.yml` (replacing the file if it holds only `[]`) and restart. The preset appears in the picker; one that cannot mount shows its reason there instead of silently falling back.
+
 ## Behavior
 
-- **`agent(prompt, { globalMemory: true })`**: Passes `globalMemory: true` in the child's `AgentOptions` (`agentOptions.globalMemory = true`). A memory plugin observing agent creation can inspect `agent.options.globalMemory` to decide whether to inject global memory into the child subagent.
-- **`globalMemory: false` or omitted**: `globalMemory` is `false`. The child subagent does not receive global memory.
-- **`run_in_background`**: Defaults to `true` (as in background-enabled configurations), allowing long-running workflows to return a job ID immediately.
-- Includes `PtcWorkflowEngine`, an enhanced TypeScript/Node PTC workflow runtime engine that parses and forwards `globalMemory` from workflow scripts to subagent invocations.
+- **`agent(prompt, { globalMemory: true })`** sets `agentOptions.globalMemory = true` on that child. A memory plugin decides what that means — see the contract below.
+- **Omitted or `false`** sends no `agentOptions` for that child unless `provider`/`model` were given, exactly as upstream does. A non-boolean value ends the script with `INVALID_ARGUMENT`, like every other malformed option.
+- **Providers without the `agentOptions` capability** still run ordinary `agent()` calls. Asking for `globalMemory` through one is refused by the harness, as asking for `provider`/`model` already is.
+- **`run_in_background` defaults to `false`**, as upstream: the call waits for the workflow unless the model asks otherwise. `enableRunInBackground` only decides whether the parameter is offered.
 
 ## Contract for Memory Plugins
 
@@ -23,32 +44,34 @@ This package establishes a product-neutral contract between workflow execution a
 ### Example: Memory Plugin Consuming `globalMemory`
 
 ```typescript
-import { Context } from '@deepseek-ai/cordis';
-import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { Context } from '@deepseek-ai/cordis'
 
 export function apply(ctx: Context) {
   ctx.systemPrompt.section({
     name: 'memory:global',
-    text: async (promptContext) => {
-      const agent = promptContext.scope as Agent;
+    order: 50,
+    // A section provider returns its text synchronously — an async provider
+    // would put a Promise where the prompt text belongs.
+    text: (promptContext) => {
+      const agent = promptContext.agent
+      if (agent === undefined) return ''
 
-      // Check if this is a child subagent spawned by a workflow or subagent tool
-      const isChild = agent.session.header.origin === 'subagent';
-      const wantsGlobalMemory = agent.options?.globalMemory === true;
+      // A top-level session always gets global memory; a delegated child only
+      // when the delegation asked for it.
+      const isChild = agent.session.header.origin === 'subagent'
+      if (isChild && agent.options.globalMemory !== true) return ''
 
-      if (isChild && !wantsGlobalMemory) {
-        // Child subagent without explicit globalMemory flag: omit global memory
-        return '';
-      }
-
-      // Inject global memory content
-      return '<global_memory>\n...\n</global_memory>';
+      return '<global_memory>\n...\n</global_memory>'
     },
-  });
+  })
 }
 ```
 
 ## Upstream Lineage
 
-- Upstream packages: `@deepseek-ai/dsh-tool-workflow@0.2.0-rc.2`, `@deepseek-ai/dsh-workflow-ptc@0.2.0-rc.2`
-- Modified source files: `src/index.ts` (tool definition), `src/engine.ts` (`PtcWorkflowEngine` and `PtcWorkflowRun`), `src/guest-source.ts` (guest script allowing `globalMemory` in `SUPPORTED_AGENT_OPTIONS`), `src/record.ts` (workflow recorder mirror).
+Forked from `@deepseek-ai/dsh-workflow-ptc@0.2.1-alpha.1` and `@deepseek-ai/dsh-tool-workflow@0.2.1-alpha.1` (MIT), every hunk marked `tivility:`.
+
+- `src/ptc/` is the engine, upstream file for file. `host.ts` and `types.ts` carry `globalMemory` from the guest's request into `agentOptions`; `guest-source.ts` is upstream's guest with `globalMemory` accepted by `agent()` — patched in decoded form and re-encoded, so the diff against upstream's guest is exactly those lines. Upstream's `guest.ts`, the guest's TypeScript source, is not carried: only the generated string runs.
+- `src/` is the tool, upstream file for file; `index.ts` differs in its name and in the one line of the description that lists `agent()` options.
+
+Narrow on purpose. On a new harness release, take upstream's two `src/` directories and re-apply the marked hunks; anything else that differs is drift.

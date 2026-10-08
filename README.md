@@ -29,6 +29,14 @@ and says so alongside the reason this repository exists:
 
 > **Harness Line Compatibility Note:** `@tivility/dsh-tool-subagent-model` targets the DSH 0.1 line, whereas `@tivility/dsh-tool-subagent-memory`, `@tivility/dsh-tool-workflow-memory`, and `@tivility/dsh-compaction-window` target the DSH 0.2 line.
 
+### The 0.2 line packages
+
+**Installing.** On 0.2 the rows these three replace live inside each agent preset, and a profile patch can neither reach into a preset nor rename a row, so each is installed as a preset derived from a shipped one — see a package's README, and [`scripts/derive-preset.mjs`](scripts/derive-preset.mjs), which derives it from the composition the host is running rather than from a copy that would fall behind.
+
+**Peer ranges.** Their harness peers admit every 0.2 version from `0.2.0-rc.2` up, prereleases included, and stop below 0.3. A range like `>=0.2.0-rc.2` would not: a prerelease only satisfies a range carrying a prerelease on the same patch tuple, so it skips `0.2.1-alpha.1`. [`scripts/harness-range.mjs`](scripts/harness-range.mjs) writes the tuple-by-tuple range; regenerate it for a new line. Only packages imported at runtime are peers — type-only imports stay in `devDependencies`.
+
+**Forks.** `tool-subagent-memory` and `tool-workflow-memory` are upstream source plus small patches marked `tivility:`. On a new harness release, take upstream's `src/` and re-apply the marked hunks; anything else that differs is drift.
+
 The four web plugins solve one problem between them: the harness's GUI is
 reachable from another machine, and nothing that machine can see is a file, a
 lock, or a link. Each is useful alone; installed together, `readonly-auth`
