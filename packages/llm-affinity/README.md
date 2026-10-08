@@ -3,6 +3,8 @@
 Puts the DeepSeek Harness session id on the wire, so a gateway in front of the
 model can key per-conversation state.
 
+Targets DeepSeek Harness **0.1.x** (`@deepseek-ai/dsh-* ~0.1.1-rc.2`).
+
 ## The gap this fills
 
 The harness stamps every loop-built request with `GenerateOptions.sessionId`, and

@@ -3,6 +3,8 @@
 Delegation with per-call **model**, **provider**, and **reasoning effort**. A
 drop-in replacement for `@deepseek-ai/dsh-tool-subagent`.
 
+Targets DeepSeek Harness **0.1.x** (`@deepseek-ai/dsh-* ~0.1.1-rc.2`).
+
 Paired with the [`standard-subagent-model`](presets/standard-subagent-model)
 preset, which is the shipped `standard` composition with its two delegation rows
 pointed here.

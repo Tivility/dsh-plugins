@@ -3,6 +3,8 @@
 An owner lock for a harness deployment more than one person can reach. Without
 the token you watch; with it, nothing is different from an unlocked harness.
 
+Targets DeepSeek Harness **0.1.x** (`@deepseek-ai/dsh-* ~0.1.1-rc.2`).
+
 Publishes the `ownerAuth` service, so other plugins reuse this one key instead
 of growing their own.
 

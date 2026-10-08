@@ -2,6 +2,8 @@
 
 Shared HTTP building blocks for out-of-tree DeepSeek Harness web plugins.
 
+Targets DeepSeek Harness **0.1.x** (`@deepseek-ai/dsh-* ~0.1.1-rc.2`).
+
 **This is a library, not a plugin.** Nothing here is installed into a profile or
 listed in `cordis.patch.yml`; the plugins that need it depend on it.
 
