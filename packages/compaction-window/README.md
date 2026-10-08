@@ -2,7 +2,7 @@
 
 Per-session working context window and compaction settings for DeepSeek Harness.
 
-Targets DeepSeek Harness **0.2.x** (`@deepseek-ai/dsh-* >=0.2.0-rc.2`).
+Targets the DeepSeek Harness **0.2** line — `0.2.0-rc.2` and every later 0.2 prerelease or release, below 0.3.
 
 Provides the `compaction` service as a drop-in replacement for `@deepseek-ai/dsh-compaction-basic`. It reuses `BasicCompactionEngine` and the harness's native pressure and retention budget arithmetic while adding working context window caps and per-session dynamic configuration.
 
@@ -22,7 +22,20 @@ Large-context models (such as 1M models) have high context limits, but practical
 dsh plugin add @tivility/dsh-compaction-window
 ```
 
-Replace `@deepseek-ai/dsh-compaction-basic` in your profile or agent preset configuration with `@tivility/dsh-compaction-window`.
+On DeepSeek Harness 0.2 the row this package replaces lives **inside each agent preset** — in `dsh web` the host-level copy is disabled. Two things that look like they should install it do not:
+
+- a profile patch with the same `id` and this package's `name` is skipped (`patch: name mismatch … skipping`, logged once at boot);
+- a profile patch cannot address a row inside a preset at all.
+
+So it is installed by declaring a preset: a shipped one, with its `compaction-basic` row renamed to this package. [`scripts/derive-preset.mjs`](../../scripts/derive-preset.mjs) derives it from the composition the host is running, so nothing is copied that could fall behind a harness release:
+
+```sh
+dsh --profile web --dump-config \
+  | node scripts/derive-preset.mjs --dsh <dsh install dir> --id memory --name 记忆模式 --with compaction-window \
+  > /tmp/memory-preset.yml
+```
+
+Add the generated row to `~/.dsh/profiles/web/cordis.patch.yml` (replacing the file if it holds only `[]`) and restart. The preset appears in the picker; one that cannot mount shows its reason there instead of silently falling back.
 
 ## Configuration
 
@@ -41,11 +54,12 @@ Accepts everything `@deepseek-ai/dsh-compaction-basic` accepts, plus `contextWin
       - provider: deepseek
         model: deepseek-chat
         contextWindow: 64000
+        headroomTokens: 8000   # see "Headroom is absolute" — required at this size
 ```
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `contextWindow` | unset (model's real window) | Working context window cap; clamped to model's real window. Positive integer. |
+| `contextWindow` | unset (model's real window) | Working context window cap; clamped to model's real window. Positive integer. Also accepted on each `modelPolicies` entry. |
 | `thresholdRatio` | `0.8` | Fraction of effective window triggering compaction. |
 | `headroomTokens` | `65536` | Additional pressure headroom beyond reserved completion tokens. |
 | `retainRatio` | `0.16` | Verbatim recent context fraction retained. Mutually exclusive with `retainTokens`. |
@@ -57,6 +71,26 @@ Accepts everything `@deepseek-ai/dsh-compaction-basic` accepts, plus `contextWin
 | `maxOverflowRetries`| `1` | Recovery attempts on context overflow. |
 | `modelPolicies` | `[]` | Exact provider/model overrides. |
 | `auto` | `true` | Enable automatic step-boundary and overflow compaction listeners. |
+
+## Headroom is absolute
+
+`headroomTokens` is a token count, not a fraction, and its default of 65,536 is sized for physical windows in the hundreds of thousands. A working window has to leave room for it **and** for the request's completion reservation before any pressure can be measured. With a 32k reservation and the default headroom, a working window needs to exceed roughly 110k; at 128k the threshold is only about 30k.
+
+The base engine's answer to a window that cannot work is a log warning and a turn that continues uncompacted — compaction silently stops. So this plugin refuses such settings where they are made instead:
+
+- **At activation**, a configured `contextWindow` (top-level or per model) that cannot work even with no completion reservation fails the load, naming the setting.
+- **`setSessionSettings`** checks the merged settings against the session's own model and reservation, and rejects them without writing anything.
+- **`effectiveSettings`** returns a `problem` when the current combination cannot work — the one case neither check above can see in advance, a configured window that only fails for a particular model's reservation.
+
+Lower `headroomTokens` (and retention) along with the window: `contextWindow: 64000, headroomTokens: 8000` works where `contextWindow: 64000` alone never can.
+
+## How it relates to `compaction-basic`
+
+It is `BasicCompactionEngine`, not a copy of it. `compactIfNeeded` calls the base engine's own implementation with two inputs adjusted for that call: the conversation model's context window capped at the working window, and the session's overrides expressed as an ordinary model policy. The compaction lock, tool-result pruning, retries, and the warning dedupe all stay the harness's code, at whatever version the host runs.
+
+That is the forward-compatibility property worth having. A fix to the base engine reaches this plugin without a release of it; a re-implementation would have to be re-copied by hand, and an earlier version of this package that did exactly that had already drifted — it lost the base engine's compaction-lock recheck.
+
+The arithmetic in `src/math.ts` mirrors the base engine's and is used only to validate settings and report `effectiveSettings`; the decision to compact is never made by it.
 
 ## Service API
 
@@ -85,11 +119,13 @@ console.log(effective.realContextWindow) // 1000000
 
 ### Precedence
 
-Settings resolve in the following order:
+Every setting, `contextWindow` included, resolves in the same order:
 1. **Session settings** (via `setSessionSettings`)
 2. **Model policies** (`modelPolicies` matching `provider/model`)
 3. **Plugin config** (top-level `contextWindow`, `thresholdRatio`, etc.)
 4. **Model real window / DSH defaults**
+
+The working window is then clamped to the model's real one. An adapter that reports no window uses the working window as is.
 
 With no configuration or session overrides, the service behaves identically to `@deepseek-ai/dsh-compaction-basic`.
 
