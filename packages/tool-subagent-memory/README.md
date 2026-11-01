@@ -1,6 +1,6 @@
 # @tivility/dsh-tool-subagent-memory
 
-Targets the DeepSeek Harness **0.2** line — `0.2.0-rc.2` and every later 0.2 prerelease or release, below 0.3.
+Targets the DeepSeek Harness **0.2** line — `0.2.1-rc.5` and every later 0.2 prerelease or release, below 0.3. Version 0.1.x of this package targets `0.2.0-rc.2`; harness 0.2.1 replaced background and foreground delegation with managed subagent activations.
 
 Model-facing delegation tool for DeepSeek Harness 0.2 with per-call global memory control.
 
@@ -32,7 +32,7 @@ Add the generated row to `~/.dsh/profiles/web/cordis.patch.yml` (replacing the f
 - **`global_memory: true`** sets `agentOptions.globalMemory = true` on the child. A memory plugin decides what that means — see the contract below.
 - **Omitted or `false`** sends no `agentOptions` at all, exactly as upstream does for an ordinary delegation. The child's `agent.options.globalMemory` is absent; consumers should test `=== true`.
 - **The parameter appears only where it can be honored.** A provider without the `agentOptions` capability — the ACP provider, for one — refuses any request carrying `agentOptions`, so the tool does not offer `global_memory` there instead of offering a way to fail every call.
-- Everything else is upstream's: foreground and continuable background runs, model selection (`provider`, `model`, `reasoning_effort`), and the recursion limit, which falls back to the deployment-wide `subagents.maxDepth` when the tool configures none.
+- Everything else is upstream's: managed activations (the tool returns the child id and the completion arrives as a notice), model selection (`provider`, `model`, `reasoning_effort`), and the recursion limit, which falls back to the deployment-wide `subagents.maxDepth` when the tool configures none.
 
 ## Contract for Memory Plugins
 
@@ -69,7 +69,7 @@ export function apply(ctx: Context) {
 
 ## Upstream Lineage
 
-Forked from `@deepseek-ai/dsh-tool-subagent@0.2.1-alpha.1` (MIT).
+Forked from `@deepseek-ai/dsh-tool-subagent@0.2.1-rc.5` (MIT).
 
 `src/index.ts` is upstream with one patch, every hunk marked `tivility:` — a module augmentation adding `AgentOptions.globalMemory`, the `global_memory` parameter, and the line that adds `globalMemory` to a request that asked for it. `src/list-models.ts`, `src/model-selection.ts` and `src/model-selection-state.ts` are upstream verbatim; `src/model-selection-settings.ts` re-exports upstream's, so the settings service is the host's own.
 

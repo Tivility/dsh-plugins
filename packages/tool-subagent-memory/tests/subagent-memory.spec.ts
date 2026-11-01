@@ -76,17 +76,14 @@ function createBench(options: {
         if (configured === 'provider-managed') return undefined
         return configured ?? DEPLOYMENT_MAX_DEPTH
       },
-      start(_provider: string, request: Record<string, unknown>) {
-        assertCapabilities(request)
-        requests.push(request)
-        return Promise.resolve({
-          id: 'run-1',
-          result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] }),
-          dispose: () => {},
-        })
+      /** `SubagentRuntime.startActivation`: capability checks, then a child id. */
+      startActivation(start: { provider: string; request: Record<string, unknown> }) {
+        assertCapabilities(start.request)
+        requests.push(start.request)
+        return Promise.resolve({ childId: 'child-1' })
       },
     },
-    systemPrompt: { section: () => () => {} },
+    systemPrompt: { section: () => () => {}, context: () => () => {}, getSectionOrder: () => 0, getContextOrder: () => 0 },
     sessionProjections: { register: () => {}, stateOf: () => null },
     get: () => undefined,
     on: () => () => {},
@@ -95,7 +92,7 @@ function createBench(options: {
     logger: { info: () => {}, warn: () => {} },
   }
 
-  apply(ctx as never, { provider: 'spawn', enableRunInBackground: false, ...options.config } as never)
+  apply(ctx as never, { provider: 'spawn', ...options.config } as never)
   if (tool === undefined) throw new Error('no tool registered')
   const registered: Tool = tool
 

@@ -1,6 +1,6 @@
 /**
  * The workflow engine half of this package: upstream
- * `@deepseek-ai/dsh-workflow-ptc@0.2.1-alpha.1` with `globalMemory` accepted by
+ * `@deepseek-ai/dsh-workflow-ptc@0.2.1-rc.5` with `globalMemory` accepted by
  * agent(). Mount it in place of `@deepseek-ai/dsh-workflow-ptc`.
  * @module @tivility/dsh-tool-workflow-memory/engine
  */

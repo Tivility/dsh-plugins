@@ -23,23 +23,25 @@ function createEngine(options: { agentOptionsCapable?: boolean } = {}) {
   const requests: Record<string, unknown>[] = []
   const capable = options.agentOptionsCapable ?? true
   const ctx = new Context() as Context & Record<string, unknown>
-  for (const name of ['subagents', 'ptcRuntime', 'sandboxPolicy']) ctx.provide(name)
+  for (const name of ['subagents', 'ptcRuntime', 'sandboxPolicy', 'workingDirectory']) ctx.provide(name)
 
   ctx.subagents = {
     getProvider: () => ({ name: 'spawn', capabilities: { agentOptions: capable } }),
-    start: (_provider: string, request: Record<string, unknown>) => {
+    startActivation: (start: { request: Record<string, unknown> }) => {
+      const request = start.request
       // SubagentRuntime.assertCapabilities, for the capability under test.
       if (request.agentOptions !== undefined && !capable) {
         return Promise.reject(new Error('subagent provider "spawn" does not support the "agentOptions" capability'))
       }
       requests.push(request)
       return Promise.resolve({
-        id: `child-${String(requests.length)}`,
+        childId: `child-${String(requests.length)}`,
         result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] }),
         dispose: () => Promise.resolve(),
       })
     },
   }
+  ctx.workingDirectory = { ensure: () => Promise.resolve('/tmp') }
 
   let childArgs: ChildArgs = {}
   ctx.ptcRuntime = {
@@ -54,7 +56,7 @@ function createEngine(options: { agentOptionsCapable?: boolean } = {}) {
       return { value: { value: null, stopReason: 'completed', agentsStarted: 1 } }
     },
   }
-  ctx.sandboxPolicy = { resolve: () => ({ workspaceRoot: '/tmp' }) }
+  ctx.sandboxPolicy = { resolve: () => ({ workspaceRoot: '/tmp', mode: 'danger-full-access' }) }
 
   // Through the schema, as the loader would: it is what fills the limits.
   const config = (PtcWorkflowEngine as unknown as { Config(value: unknown): unknown }).Config({ provider: 'spawn' })

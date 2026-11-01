@@ -1,6 +1,6 @@
 # @tivility/dsh-tool-workflow-memory
 
-Targets the DeepSeek Harness **0.2** line — `0.2.0-rc.2` and every later 0.2 prerelease or release, below 0.3.
+Targets the DeepSeek Harness **0.2** line — `0.2.1-rc.5` and every later 0.2 prerelease or release, below 0.3. Version 0.1.x of this package targets `0.2.0-rc.2`; harness 0.2.1 replaced background and foreground delegation with managed subagent activations.
 
 Model-facing workflow tool and PTC workflow engine for DeepSeek Harness 0.2 with per-call global memory control.
 
@@ -69,7 +69,7 @@ export function apply(ctx: Context) {
 
 ## Upstream Lineage
 
-Forked from `@deepseek-ai/dsh-workflow-ptc@0.2.1-alpha.1` and `@deepseek-ai/dsh-tool-workflow@0.2.1-alpha.1` (MIT), every hunk marked `tivility:`.
+Forked from `@deepseek-ai/dsh-workflow-ptc@0.2.1-rc.5` and `@deepseek-ai/dsh-tool-workflow@0.2.1-rc.5` (MIT), every hunk marked `tivility:`.
 
 - `src/ptc/` is the engine, upstream file for file. `host.ts` and `types.ts` carry `globalMemory` from the guest's request into `agentOptions`; `guest-source.ts` is upstream's guest with `globalMemory` accepted by `agent()` — patched in decoded form and re-encoded, so the diff against upstream's guest is exactly those lines. Upstream's `guest.ts`, the guest's TypeScript source, is not carried: only the generated string runs.
 - `src/` is the tool, upstream file for file; `index.ts` differs in its name and in the one line of the description that lists `agent()` options.
