@@ -10,6 +10,7 @@
  * how that went unnoticed.
  */
 
+import * as vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import PtcWorkflowEngine from '../src/engine.js'
@@ -19,8 +20,9 @@ import { WORKFLOW_GUEST_SOURCE } from '../src/ptc/guest-source.js'
 /** What one agent() call passes to the host, as the guest would. */
 type ChildArgs = Record<string, unknown>
 
-function createEngine(options: { agentOptionsCapable?: boolean } = {}) {
+function createEngine(options: { agentOptionsCapable?: boolean; programFormat?: string } = {}) {
   const requests: Record<string, unknown>[] = []
+  const programs: string[] = []
   const capable = options.agentOptionsCapable ?? true
   const ctx = new Context() as Context & Record<string, unknown>
   for (const name of ['subagents', 'ptcRuntime', 'sandboxPolicy', 'workingDirectory']) ctx.provide(name)
@@ -46,8 +48,10 @@ function createEngine(options: { agentOptionsCapable?: boolean } = {}) {
   let childArgs: ChildArgs = {}
   ctx.ptcRuntime = {
     language: 'typescript',
+    programFormat: options.programFormat ?? 'function-body',
     resolve: (spec: unknown) => spec,
-    async run(spec: { bindings: { global: string; functions: Record<string, (value?: unknown) => Promise<unknown>> }[] }) {
+    async run(spec: { program: string; bindings: { global: string; functions: Record<string, (value?: unknown) => Promise<unknown>> }[] }) {
+      programs.push(spec.program)
       const host = spec.bindings.find(binding => binding.global === 'workflowHost')!.functions
       await host.begin!()
       const child = await host.startChild!({ prompt: 'probe', ...childArgs }) as { callId: number }
@@ -72,7 +76,7 @@ function createEngine(options: { agentOptionsCapable?: boolean } = {}) {
     await run.dispose()
     return { result, request: requests.at(-1) }
   }
-  return { runOnce }
+  return { runOnce, programs }
 }
 
 describe('what an agent() child sends', () => {
@@ -99,6 +103,40 @@ describe('what an agent() child sends', () => {
   it('still runs an ordinary child through a provider without agentOptions', async () => {
     const { result } = await createEngine({ agentOptionsCapable: false }).runOnce({})
     expect(result.stopReason).toBe('completed')
+  })
+})
+
+describe('the program the engine hands the PTC runtime', () => {
+  const AsyncFunction = (async () => {}).constructor as new (...source: string[]) => unknown
+
+  it('is an async function body for a function-body runtime', async () => {
+    const engine = createEngine({ programFormat: 'function-body' })
+    await engine.runOnce({})
+    expect(() => new AsyncFunction('workflowHost', engine.programs[0]!)).not.toThrow()
+  })
+
+  it('wraps the body in an awaited call for a REPL runtime', async () => {
+    const engine = createEngine({ programFormat: 'repl' })
+    await engine.runOnce({})
+    expect(engine.programs[0]).toMatch(/^await \(async \(\) => \{\n/)
+  })
+
+  // Harness 0.2.2 adds Script mode; a function body's top-level `return` is a SyntaxError there.
+  it('is a valid classic Script for a script runtime', async () => {
+    const script = createEngine({ programFormat: 'script' })
+    await script.runOnce({})
+    expect(() => new vm.Script(script.programs[0]!)).not.toThrow()
+    const functionBody = createEngine({ programFormat: 'function-body' })
+    await functionBody.runOnce({})
+    expect(() => new vm.Script(functionBody.programs[0]!)).toThrow(SyntaxError)
+  })
+
+  it('fails the run for a program format it does not know', async () => {
+    const engine = createEngine({ programFormat: 'esm-module' })
+    const { result } = await engine.runOnce({})
+    expect(result.stopReason).toBe('error')
+    expect(result.error).toContain('workflow runtime program format "esm-module" is not supported')
+    expect(engine.programs).toHaveLength(0)
   })
 })
 

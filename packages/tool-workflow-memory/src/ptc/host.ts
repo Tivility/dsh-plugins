@@ -26,6 +26,25 @@ interface ChildRecord {
 const GUEST_URL = `data:text/javascript,${encodeURIComponent(WORKFLOW_GUEST_SOURCE)}`
 const PROGRAM = `const { runWorkflowGuest } = await import(${JSON.stringify(GUEST_URL)}); return await runWorkflowGuest(workflowHost);`
 
+/**
+ * tivility: upstream 0.2.2's program-format mapping, backported so the engine
+ * also runs under a harness 0.2.2 PTC runtime in Script mode
+ * (`executionMode: vm-script`), which rejects the function body's top-level
+ * `return`. Upstream 0.2.1 maps only `repl`. Drop this hunk when re-forking
+ * from 0.2.2 or later.
+ * @param format - the runtime's `programFormat`; a string because 0.2.1 types omit `script`.
+ * @returns the guest launcher in that format.
+ * @throws for a format this engine does not know.
+ */
+function programFor(format: string): string {
+  switch (format) {
+    case 'function-body': return PROGRAM
+    case 'repl': return `await (async () => {\n${PROGRAM}\n})()`
+    case 'script': return `(async () => {\n${PROGRAM}\n})()`
+    default: throw new Error(`workflow runtime program format "${format}" is not supported`)
+  }
+}
+
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('workflow binding requires an object')
   return value as Record<string, unknown>
@@ -295,7 +314,7 @@ export class PtcWorkflowRun implements WorkflowRun {
         throw new Error(`workflow runtime cannot enforce the ${this.policy.mode} file policy`)
       }
       const outcome = await this.runtime.run(this.runtime.resolve({
-        program: this.runtime.programFormat === 'repl' ? `await (async () => {\n${PROGRAM}\n})()` : PROGRAM,
+        program: programFor(this.runtime.programFormat),
         bindings: [{ global: 'workflowHost', functions: this.bindings() }],
         cwd,
         ...this.runtime.sandboxMode === undefined ? {} : { sandboxPolicy: this.policy },

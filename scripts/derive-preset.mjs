@@ -35,7 +35,8 @@ import { join } from 'node:path'
 
 const SWAPS = {
   'compaction-window': { id: 'compaction-basic', name: '@tivility/dsh-compaction-window' },
-  'tool-subagent-memory': { id: 'tool-subagent', name: '@tivility/dsh-tool-subagent-memory' },
+  // Upstream 0.2.2's model-selection keys; the fork reads 0.2.1's `modelSelectionSettings`.
+  'tool-subagent-memory': { id: 'tool-subagent', name: '@tivility/dsh-tool-subagent-memory', unreadConfig: ['modelSelection', 'modelDiscovery'] },
   'tool-workflow-memory': [
     { id: 'workflow-ptc', name: '@tivility/dsh-tool-workflow-memory/engine' },
     { id: 'tool-workflow', name: '@tivility/dsh-tool-workflow-memory' },
@@ -62,7 +63,7 @@ for (const key of wanted) {
     process.exit(1)
   }
 }
-const swaps = new Map(wanted.flatMap(key => [SWAPS[key]].flat()).map(swap => [swap.id, swap.name]))
+const swaps = new Map(wanted.flatMap(key => [SWAPS[key]].flat()).map(swap => [swap.id, swap]))
 
 const require = createRequire(join(dshDir, 'package.json'))
 const yaml = require(require.resolve('js-yaml', { paths: [dshDir, join(dshDir, 'packages/boot/app-boot')] }))
@@ -95,7 +96,11 @@ const swapRows = list => list.map((row) => {
   const replacement = swaps.get(row.id)
   if (replacement === undefined) return row
   swapped.add(row.id)
-  return { ...row, name: replacement }
+  const unread = (replacement.unreadConfig ?? []).filter(key => Object.hasOwn(row.config ?? {}, key))
+  if (unread.length > 0) {
+    console.error(`derive-preset: warning: row "${row.id}" sets ${unread.map(key => `\`${key}\``).join(', ')}, which ${replacement.name} does not read — the derived preset runs without them; see that package's README`)
+  }
+  return { ...row, name: replacement.name }
 })
 const plugins = swapRows(preset.config.plugins)
 
