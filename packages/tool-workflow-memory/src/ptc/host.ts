@@ -1,11 +1,12 @@
 /** Workflow child ownership and progress over the shared sandboxed PTC executor. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-working-directory'
 import type { PtcBindingFunction, PtcJsonValue, PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
-import type { SubagentRun } from '@deepseek-ai/dsh-subagent'
+import type { SubagentActivation } from '@deepseek-ai/dsh-subagent'
 import { assertObjectJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { ObjectJsonSchema } from '@deepseek-ai/dsh-tools'
 import { assertNever, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
@@ -18,12 +19,31 @@ import type { ChildStartRequest, WorkerInit } from './types.js'
 
 interface ChildRecord {
   readonly callId: number
-  readonly run: SubagentRun
+  readonly run: SubagentActivation
   disposal?: Promise<void>
 }
 
 const GUEST_URL = `data:text/javascript,${encodeURIComponent(WORKFLOW_GUEST_SOURCE)}`
 const PROGRAM = `const { runWorkflowGuest } = await import(${JSON.stringify(GUEST_URL)}); return await runWorkflowGuest(workflowHost);`
+
+/**
+ * tivility: upstream 0.2.2's program-format mapping, backported so the engine
+ * also runs under a harness 0.2.2 PTC runtime in Script mode
+ * (`executionMode: vm-script`), which rejects the function body's top-level
+ * `return`. Upstream 0.2.1 maps only `repl`. Drop this hunk when re-forking
+ * from 0.2.2 or later.
+ * @param format - the runtime's `programFormat`; a string because 0.2.1 types omit `script`.
+ * @returns the guest launcher in that format.
+ * @throws for a format this engine does not know.
+ */
+function programFor(format: string): string {
+  switch (format) {
+    case 'function-body': return PROGRAM
+    case 'repl': return `await (async () => {\n${PROGRAM}\n})()`
+    case 'script': return `(async () => {\n${PROGRAM}\n})()`
+    default: throw new Error(`workflow runtime program format "${format}" is not supported`)
+  }
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('workflow binding requires an object')
@@ -123,6 +143,7 @@ export class PtcWorkflowRun implements WorkflowRun {
   private cancelReason: string | undefined
   private disposed: Promise<void> | undefined
   private readonly externalAbort: () => void
+  private readonly cwd: Promise<string>
 
   constructor(
     private readonly ctx: Context,
@@ -140,6 +161,7 @@ export class PtcWorkflowRun implements WorkflowRun {
     this.externalAbort = () => { this.cancel('workflow signal aborted') }
     if (signal?.aborted) this.externalAbort()
     else signal?.addEventListener('abort', this.externalAbort, { once: true })
+    this.cwd = ctx.workingDirectory.ensure(parent, this.controller.signal)
     // Consumers attach durable run recording after start() returns.
     this.result = Promise.resolve().then(() => this.drive())
   }
@@ -200,19 +222,25 @@ export class PtcWorkflowRun implements WorkflowRun {
   private async startChild(request: ChildStartRequest): Promise<PtcJsonValue> {
     this.requireActive()
     const callId = ++this.started
-    const run = await this.subagents.start(this.provider, {
-      prompt: [{ type: 'text', text: request.prompt }],
-      parent: this.parent,
+    const run = await this.subagents.startActivation({
+      provider: this.provider,
+      label: `${this.meta.name} child ${callId}`,
+      delivery: 'caller',
       signal: this.controller.signal,
-      ...request.schema === undefined ? {} : { outputSchema: request.schema },
-      // tivility: globalMemory joins provider/model in deciding whether to send
-      // agentOptions at all. A provider without that capability refuses any
-      // request carrying them, so an ordinary agent() call must send none.
-      ...request.provider === undefined && request.model === undefined && request.globalMemory !== true ? {} : {
-        agentOptions: {
-          ...request.provider === undefined ? {} : { provider: request.provider },
-          ...request.model === undefined ? {} : { model: request.model },
-          ...request.globalMemory === true ? { globalMemory: true } : {},
+      request: {
+        cwd: await this.cwd,
+        prompt: [{ type: 'text', text: request.prompt }],
+        parent: this.parent,
+        ...request.schema === undefined ? {} : { outputSchema: request.schema },
+        // tivility: globalMemory joins provider/model in deciding whether to send
+        // agentOptions at all. A provider without that capability refuses any
+        // request carrying them, so an ordinary agent() call must send none.
+        ...request.provider === undefined && request.model === undefined && request.globalMemory !== true ? {} : {
+          agentOptions: {
+            ...request.provider === undefined ? {} : { provider: request.provider },
+            ...request.model === undefined ? {} : { model: request.model },
+            ...request.globalMemory === true ? { globalMemory: true } : {},
+          },
         },
       },
     })
@@ -223,7 +251,7 @@ export class PtcWorkflowRun implements WorkflowRun {
       await this.disposeChild(record)
       throw new Error('workflow child started after cancellation')
     }
-    return { callId, childId: run.id }
+    return { callId, childId: run.childId }
   }
 
   private async childResult(record: ChildRecord): Promise<PtcJsonValue> {
@@ -280,11 +308,16 @@ export class PtcWorkflowRun implements WorkflowRun {
   private async drive(): Promise<WorkflowResult> {
     let result: WorkflowResult
     try {
+      const cwd = await this.cwd
+      this.requireActive()
+      if (this.runtime.sandboxMode === undefined && this.policy.mode !== 'danger-full-access') {
+        throw new Error(`workflow runtime cannot enforce the ${this.policy.mode} file policy`)
+      }
       const outcome = await this.runtime.run(this.runtime.resolve({
-        program: PROGRAM,
+        program: programFor(this.runtime.programFormat),
         bindings: [{ global: 'workflowHost', functions: this.bindings() }],
-        cwd: this.policy.workspaceRoot,
-        sandboxPolicy: this.policy,
+        cwd,
+        ...this.runtime.sandboxMode === undefined ? {} : { sandboxPolicy: this.policy },
         timeoutMs: null,
         signal: this.controller.signal,
       }))

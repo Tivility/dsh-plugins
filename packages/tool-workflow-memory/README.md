@@ -1,6 +1,6 @@
 # @tivility/dsh-tool-workflow-memory
 
-Targets the DeepSeek Harness **0.2** line — `0.2.0-rc.2` and every later 0.2 prerelease or release, below 0.3.
+Targets DeepSeek Harness **0.2.1 and 0.2.2** — from `0.2.1-rc.5` through the 0.2.2 release. dsh refuses to install or activate it on any other harness version; see [Harness Versions](#harness-versions).
 
 Model-facing workflow tool and PTC workflow engine for DeepSeek Harness 0.2 with per-call global memory control.
 
@@ -38,7 +38,7 @@ Add the generated row to `~/.dsh/profiles/web/cordis.patch.yml` (replacing the f
 
 This package establishes a product-neutral contract between workflow execution and memory plugins:
 
-1. **Option Propagation**: When a workflow script calls `agent(prompt, { globalMemory: true })`, the guest runner validates `opts.globalMemory` (must be a boolean) and forwards it to the host engine bindings, which passes `{ globalMemory: true }` in `agentOptions` to `subagents.start()`.
+1. **Option Propagation**: When a workflow script calls `agent(prompt, { globalMemory: true })`, the guest runner validates `opts.globalMemory` (must be a boolean) and forwards it to the host engine bindings, which add `globalMemory: true` to the `agentOptions` of the request passed to `subagents.startActivation()`.
 2. **Consumption**: Any memory plugin (or system prompt provider) can inspect `agent.options.globalMemory` on the newly created subagent.
 
 ### Example: Memory Plugin Consuming `globalMemory`
@@ -67,11 +67,32 @@ export function apply(ctx: Context) {
 }
 ```
 
+## Harness Versions
+
+The peer range admits only the harness lines this version was tested on end to end. dsh checks it against the running harness version, prereleases included, and blocks installation and activation when it is unmet.
+
+| Package | Harness | Forked from | Tested end to end on |
+| ------- | ------- | ----------- | -------------------- |
+| 0.2.x | `0.2.1-rc.5` – `0.2.2` | `@deepseek-ai/dsh-workflow-ptc@0.2.1-rc.5`, `@deepseek-ai/dsh-tool-workflow@0.2.1-rc.5` | `0.2.1-rc.5`, `0.2.2-alpha.2` (including `executionMode: vm-script`) |
+| 0.1.x | `0.2.0-rc.2` – `0.2.1-alpha.1` | `@deepseek-ai/dsh-workflow-ptc@0.2.1-alpha.1`, `@deepseek-ai/dsh-tool-workflow@0.2.1-alpha.1` | — |
+
+0.1.0 declares every 0.2 version below 0.3, but from harness `0.2.1-alpha.2` on every `agent()` call fails: that release removed the `subagents.start()` the engine calls.
+
+Harness 0.2.2 adds a `script` PTC program format, used by the Node runtime's `executionMode: vm-script`, which rejects the engine's top-level `return`. The engine carries upstream 0.2.2's program-format mapping as a marked hunk, so it runs under every 0.2.2 program format, and a format it does not know fails the workflow with an error that names it.
+
+### Upgrading from 0.1.x
+
+The tool's configuration and the `agent()` options are unchanged. The engine now:
+
+- **Requires the `workingDirectory` service.** Every harness composition that provides `subagents` also provides it.
+- **Runs the workflow script in the calling agent's working directory**, and starts each `agent()` child there, instead of in the workspace root.
+- **Refuses to run under a PTC runtime that cannot enforce the file policy**, unless the policy is `danger-full-access`.
+
 ## Upstream Lineage
 
-Forked from `@deepseek-ai/dsh-workflow-ptc@0.2.1-alpha.1` and `@deepseek-ai/dsh-tool-workflow@0.2.1-alpha.1` (MIT), every hunk marked `tivility:`.
+Forked from `@deepseek-ai/dsh-workflow-ptc@0.2.1-rc.5` and `@deepseek-ai/dsh-tool-workflow@0.2.1-rc.5` (MIT), every hunk marked `tivility:`.
 
-- `src/ptc/` is the engine, upstream file for file. `host.ts` and `types.ts` carry `globalMemory` from the guest's request into `agentOptions`; `guest-source.ts` is upstream's guest with `globalMemory` accepted by `agent()` — patched in decoded form and re-encoded, so the diff against upstream's guest is exactly those lines. Upstream's `guest.ts`, the guest's TypeScript source, is not carried: only the generated string runs.
+- `src/ptc/` is the engine, upstream file for file. `host.ts` and `types.ts` carry `globalMemory` from the guest's request into `agentOptions`, and `host.ts` also carries upstream 0.2.2's program-format mapping, which a re-fork from 0.2.2 or later drops; `guest-source.ts` is upstream's guest with `globalMemory` accepted by `agent()` — patched in decoded form and re-encoded, so the diff against upstream's guest is exactly those lines. Upstream's `guest.ts`, the guest's TypeScript source, is not carried: only the generated string runs.
 - `src/` is the tool, upstream file for file; `index.ts` differs in its name and in the one line of the description that lists `agent()` options.
 
-Narrow on purpose. On a new harness release, take upstream's two `src/` directories and re-apply the marked hunks; anything else that differs is drift.
+Narrow on purpose. For a new harness line, take upstream's two `src/` directories from that line, re-apply the marked hunks, test it end to end, regenerate the peer range with [`scripts/harness-range.mjs`](../../scripts/harness-range.mjs) (the current one is `node scripts/harness-range.mjs 0.2.2 0.2.1-rc.5 packages/tool-workflow-memory/package.json`), and publish a new minor version; anything else that differs is drift.
