@@ -1,11 +1,12 @@
 # Publish one package to npm with trusted publishing: npm authenticates this
 # workflow run through GitHub's OIDC token, so no npm token is stored anywhere.
 #
-# One-time setup per package, on npmjs.com → the package → Settings →
-# Trusted Publisher → GitHub Actions: organization or user `Tivility`,
-# repository `dsh-plugins`, workflow filename `publish.yml`, no environment,
-# allowed actions including `npm publish`. The first publish must run within
-# two days of saving it.
+# One-time setup per package, right before its first publish through this
+# workflow: `scripts/trust.sh <package dir>` in a maintainer's terminal, or on
+# npmjs.com → the package → Settings → Trusted Publisher → GitHub Actions:
+# user `Tivility`, repository `dsh-plugins`, workflow filename `publish.yml`,
+# no environment, allowed actions including `npm publish`. The first publish
+# must run within two days of creating it.
 #
 #   gh workflow run publish.yml -f package=tool-subagent-memory
 #   gh workflow run publish.yml -f package=tool-subagent-memory -f tag=next -f dry_run=true
@@ -53,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
