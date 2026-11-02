@@ -1,0 +1,83 @@
+# Publish one package to npm with trusted publishing: npm authenticates this
+# workflow run through GitHub's OIDC token, so no npm token is stored anywhere.
+#
+# One-time setup per package, on npmjs.com → the package → Settings →
+# Trusted Publisher → GitHub Actions: organization or user `Tivility`,
+# repository `dsh-plugins`, workflow filename `publish.yml`, no environment,
+# allowed actions including `npm publish`. The first publish must run within
+# two days of saving it.
+#
+#   gh workflow run publish.yml -f package=tool-subagent-memory
+#   gh workflow run publish.yml -f package=tool-subagent-memory -f tag=next -f dry_run=true
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package directory under packages/
+        required: true
+        type: choice
+        options:
+          - compaction-window
+          - file-upload
+          - file-viewer
+          - llm-affinity
+          - readonly-auth
+          - session-share
+          - tool-subagent-memory
+          - tool-subagent-model
+          - tool-workflow-memory
+          - web-kit
+      tag:
+        description: npm dist-tag for the published version
+        required: true
+        default: latest
+        type: string
+      dry_run:
+        description: Build, test, and pack, then run npm publish --dry-run
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      - name: Require npm 11.5.1 or later for trusted publishing
+        run: |
+          node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number)
+            const supported = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)))
+            if (!supported) {
+              console.error(`::error::npm ${process.argv[1]} predates trusted publishing, which needs 11.5.1`)
+              process.exit(1)
+            }
+          ' "$(npm --version)"
+      - run: pnpm install --frozen-lockfile
+      - name: Build, test, pack, and publish
+        env:
+          PACKAGE: ${{ inputs.package }}
+          DIST_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            scripts/publish.sh "$PACKAGE" "$DIST_TAG" --dry-run
+          else
+            scripts/publish.sh "$PACKAGE" "$DIST_TAG"
+          fi

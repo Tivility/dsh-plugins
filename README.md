@@ -93,6 +93,19 @@ To use a working copy in a real profile without publishing:
 dsh plugin --profile web add /path/to/dsh-plugins/packages/llm-affinity
 ```
 
+## Publishing
+
+Packages are published by [`.github/workflows/publish.yml`](.github/workflows/publish.yml) with npm [trusted publishing](https://docs.npmjs.com/trusted-publishers): npm authenticates the workflow run through GitHub's OIDC token, so no npm token is stored on any machine or in the repository, and every version carries a provenance attestation.
+
+```sh
+gh workflow run publish.yml -f package=tool-subagent-memory                  # dist-tag latest
+gh workflow run publish.yml -f package=tool-subagent-memory -f dry_run=true   # rehearse
+```
+
+The workflow runs [`scripts/publish.sh`](scripts/publish.sh) on a clean checkout: it refuses a version that is already published, builds the chosen package and the workspace packages it references, runs the chosen package's tests, packs it with pnpm (which rewrites `workspace:` ranges), and publishes the tarball. `scripts/publish.sh <package> <dist-tag> --dry-run` runs the same steps locally. Publishing from a working copy instead risks stale build output: an incremental `tsc -b` can leave `lib/types` without declarations that `types` points at.
+
+Each package needs a one-time setup on npmjs.com → the package → **Settings** → **Trusted Publisher** → **GitHub Actions**: user `Tivility`, repository `dsh-plugins`, workflow filename `publish.yml`, no environment, and allowed actions including `npm publish`. A new configuration expires unless a publish through it succeeds within two days. Trusted publishing covers `npm publish` and dist-tags only; `npm deprecate` still needs an interactive `npm login`.
+
 ## Conventions
 
 These follow the harness's own rules, and getting them wrong fails in ways that
