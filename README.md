@@ -104,7 +104,13 @@ gh workflow run publish.yml -f package=tool-subagent-memory -f dry_run=true   # 
 
 The workflow runs [`scripts/publish.sh`](scripts/publish.sh) on a clean checkout: it refuses a version that is already published, builds the chosen package and the workspace packages it references, runs the chosen package's tests, packs it with pnpm (which rewrites `workspace:` ranges), and publishes the tarball. `scripts/publish.sh <package> <dist-tag> --dry-run` runs the same steps locally. Publishing from a working copy instead risks stale build output: an incremental `tsc -b` can leave `lib/types` without declarations that `types` points at.
 
-Each package needs a one-time setup on npmjs.com → the package → **Settings** → **Trusted Publisher** → **GitHub Actions**: user `Tivility`, repository `dsh-plugins`, workflow filename `publish.yml`, no environment, and allowed actions including `npm publish`. A new configuration expires unless a publish through it succeeds within two days. Trusted publishing covers `npm publish` and dist-tags only; `npm deprecate` still needs an interactive `npm login`.
+Each package needs its own one-time trusted-publisher configuration; npm has no account- or scope-wide one. A maintainer creates it from a terminal, right before the package's next publish, because a configuration expires unless a publish through it succeeds within two days:
+
+```sh
+scripts/trust.sh tool-subagent-memory tool-workflow-memory
+```
+
+The script logs in to npm if needed and runs `npm trust github <package> --file publish.yml --repository Tivility/dsh-plugins --allow-publish` for each package. npm approves the first call with two-factor authentication; ticking its option to skip two-factor authentication for five minutes lets the rest proceed without another prompt. The same configuration can be made on npmjs.com → the package → **Settings** → **Trusted Publisher** → **GitHub Actions**. Trusted publishing covers `npm publish` and dist-tags only; `npm deprecate` still needs an interactive `npm login`.
 
 ## Conventions
 
