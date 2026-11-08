@@ -186,8 +186,10 @@ function clientBench(href: string, initial: Snapshot) {
           return () => listeners.delete(listener)
         },
       },
-      open(id: string) {
-        if (snapshot.byId[id] === undefined) throw new Error(`sessions.open: unknown session ${id}`)
+    },
+    uiWorkspace: {
+      openSession(id: string) {
+        if (snapshot.byId[id] === undefined) throw new Error(`uiWorkspace.openSession: unknown session ${id}`)
         opened.push(id)
       },
     },
