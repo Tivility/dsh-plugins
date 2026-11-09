@@ -44,11 +44,15 @@ interface SessionsFace {
     getSnapshot(): SessionListSnapshot
     subscribe(listener: () => void): () => void
   }
+}
+
+/** The workspace navigation service that selects the main-view session (dsh ≥0.2). */
+interface UiWorkspaceFace {
   /**
-   * Select a session as current. Fails loud on an id the list does not carry,
-   * which is why the phase below is consulted first.
+   * Select a session and show its conversation as one navigation action. The
+   * list phase below is consulted first so only listed ids reach it.
    */
-  open(id: string): void
+  openSession(id: string): void
 }
 
 /** The slot registry, narrowed to the one registration this plugin makes. */
@@ -66,6 +70,7 @@ interface LocaleFace {
 /** The client context members this plugin uses. */
 interface ShareContext {
   readonly sessions: SessionsFace
+  readonly uiWorkspace: UiWorkspaceFace
   readonly slots: SlotsFace
   readonly locale: LocaleFace
   effect(run: () => () => void): unknown
@@ -73,7 +78,7 @@ interface ShareContext {
 }
 
 /** Client-side services this plugin drives. */
-export const inject = ['sessions', 'slots', 'locale']
+export const inject = ['sessions', 'uiWorkspace', 'slots', 'locale']
 
 /**
  * Remove the parameter from the address bar once it has been acted on.
@@ -107,7 +112,7 @@ function openRequestedSession(ctx: ShareContext): void {
       const state = ctx.sessions.list.getSnapshot()
       if (state.byId[requested] !== undefined) {
         done = true
-        ctx.sessions.open(requested)
+        ctx.uiWorkspace.openSession(requested)
         stripParam()
         return
       }
